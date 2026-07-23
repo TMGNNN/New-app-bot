@@ -4,6 +4,7 @@ import json
 import logging
 import io
 import base64
+import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -195,17 +196,30 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("እንኳን ወደ Getachew Fikadu Car Ekub በደህና መጡ! ቁጥር ለመቁረጥ ከታች ያለውን ቁልፍ ይጫኑ፡", reply_markup=reply_markup)
 
-# --- MAIN RUNNER ---
-if __name__ == '__main__':
-    from threading import Thread
-    def run_flask():
-        app.run(host='0.0.0.0', port=5000)
+# --- TELEGRAM BOT THREAD RUNNER ---
+def start_bot_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-    Thread(target=run_flask).start()
-
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(handle_admin_action))
     
-    print("🤖 Bot and Backend are running...")
-    application.run_polling()
+    print("🤖 Telegram Bot is starting polling...")
+    loop.run_until_complete(application.initialize())
+    loop.run_until_complete(application.start())
+    loop.run_until_complete(application.updater.start_polling())
+    loop.run_forever()
+
+# --- MAIN RUNNER ---
+if __name__ == '__main__':
+    from threading import Thread
+    
+    # 1. ቦቱን በተለየ ሰላማዊ Thread ማነሳት
+    bot_thread = Thread(target=start_bot_thread, daemon=True)
+    bot_thread.start()
+
+    # 2. Flask Backend ን በዋናው መስመር ማነሳት
+    port = int(os.environ.get("PORT", 5000))
+    print(f"🚀 Flask Server running on port {port}...")
+    app.run(host='0.0.0.0', port=port)
