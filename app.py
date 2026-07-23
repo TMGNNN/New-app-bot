@@ -4,16 +4,15 @@ import json
 import logging
 import io
 import base64
-import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import requests
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "7969026648:AAEmYfxun6f_UtXxg2tVETcu_gAn0Bi010g"
 ADMIN_CHAT_ID = "8982566651"
 WEB_APP_URL = "https://tangerine-entremet-b361e6.netlify.app/"
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # --- FLASK APP SETUP ---
 app = Flask(__name__)
@@ -52,7 +51,11 @@ def init_db():
 
 init_db()
 
-# --- API ENDPOINTS FOR WEBSITE ---
+# --- API ENDPOINTS ---
+
+@app.route('/', methods=['GET'])
+def home():
+    return "Server is Running Successfully!"
 
 @app.route('/api/get-tickets', methods=['GET'])
 def get_tickets():
@@ -101,125 +104,110 @@ def submit_order():
 
     send_admin_verification(selected_numbers, user_name, user_phone, referrer, user_id, receipt_b64)
 
-    return jsonify({"success": True, "message": "ትዕዛዝዎ በስኬት ተልኳል! በአድሚን በማረጋገጥ ላይ ይገኛል።"})
-
-# --- TELEGRAM BOT LOGIC ---
+    return jsonify({"success": True, "message": "ትዕዛዝዎ በስኬት ተልኳል!"})
 
 def send_admin_verification(numbers, user_name, user_phone, referrer, user_id, receipt_b64):
-    bot = Bot(token=BOT_TOKEN)
-    
     nums_str = ", ".join(map(str, numbers))
     total_price = len(numbers) * 3000
     
     msg_text = (
-        f"🚨 **አዲስ የቲኬት ደረሰኝ ደርሷል!**\n\n"
-        f"👤 **ደንበኛ፡** {user_name}\n"
-        f"📞 **ስልክ/ID፡** `{user_id}`\n"
-        f"🎟️ **የተመረጡ ቁጥሮች፡** `{nums_str}`\n"
-        f"💰 **ጠቅላላ ክፍያ፡** {total_price:,} Birr\n"
-        f"✍️ **ቆራጭ/አስገባጭ፡** {referrer}\n\n"
+        f"🚨 *አዲስ የቲኬት ደረሰኝ ደርሷል!*\n\n"
+        f"👤 *ደንበኛ፡* {user_name}\n"
+        f"📞 *ID፡* `{user_id}`\n"
+        f"🎟️ *የተመረጡ ቁጥሮች፡* `{nums_str}`\n"
+        f"💰 *ጠቅላላ ክፍያ፡* {total_price:,} Birr\n"
+        f"✍️ *ቆራጭ/አስገባጭ፡* {referrer}\n\n"
         f"እባክዎን ደረሰኙን አጣርተው ያጽድቁ ወይም ውድቅ ያድርጉ።"
     )
 
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Approve (አጽድቅ)", callback_data=f"approve_{user_id}_{'-'.join(map(str, numbers))}"),
-            InlineKeyboardButton("❌ Reject (ሰርዝ)", callback_data=f"reject_{user_id}_{'-'.join(map(str, numbers))}")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = {
+        "inline_keyboard": [[
+            {"text": "✅ Approve (አጽድቅ)", "callback_data": f"approve_{user_id}_{'-'.join(map(str, numbers))}"},
+            {"text": "❌ Reject (ሰርዝ)", "callback_data": f"reject_{user_id}_{'-'.join(map(str, numbers))}"}
+        ]]
+    }
 
     if receipt_b64 and "," in receipt_b64:
         try:
             image_data = base64.b64decode(receipt_b64.split(",")[1])
-            photo_bytes = io.BytesIO(image_data)
-            photo_bytes.name = 'receipt.jpg'
-            
-            bot.send_photo(
-                chat_id=ADMIN_CHAT_ID,
-                photo=photo_bytes,
-                caption=msg_text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
+            files = {'photo': ('receipt.jpg', image_data, 'image/jpeg')}
+            payload = {
+                'chat_id': ADMIN_CHAT_ID,
+                'caption': msg_text,
+                'parse_mode': 'Markdown',
+                'reply_markup': json.dumps(reply_markup)
+            }
+            requests.post(f"{TELEGRAM_API}/sendPhoto", data=payload, files=files)
             return
         except Exception as e:
-            print(f"Photo send failed: {e}")
+            print(f"Photo send error: {e}")
 
-    bot.send_message(chat_id=ADMIN_CHAT_ID, text=msg_text, parse_mode="Markdown", reply_markup=reply_markup)
+    payload = {
+        'chat_id': ADMIN_CHAT_ID,
+        'text': msg_text,
+        'parse_mode': 'Markdown',
+        'reply_markup': json.dumps(reply_markup)
+    }
+    requests.post(f"{TELEGRAM_API}/sendMessage", json=payload)
 
-async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# --- TELEGRAM WEBHOOK ROUTE ---
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = request.get_json()
+    if not update:
+        return 'OK', 200
 
-    data = query.data.split('_')
-    action = data[0]
-    user_id = data[1]
-    numbers = list(map(int, data[2].split('-')))
-    placeholders = ','.join(['?'] * len(numbers))
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    if action == "approve":
-        cursor.execute(f"UPDATE tickets SET status = 'sold' WHERE number IN ({placeholders})", numbers)
-        conn.commit()
-        conn.close()
-
-        await query.edit_message_caption(caption=f"✅ **ቲኬት ቁጥር {numbers} በስኬት ጸድቋል (Sold)!**") if query.message.photo else await query.edit_message_text(text=f"✅ **ቲኬት ቁጥር {numbers} በስኬት ጸድቋል (Sold)!**")
+    # /start Command
+    if 'message' in update and 'text' in update['message']:
+        chat_id = update['message']['chat']['id']
+        text = update['message']['text']
         
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"🎉 **እንኳን ደስ አለዎት!**\n\nየቆረጧቸው ቲኬቶች (ቁጥር፡ {numbers}) በስኬት ጸድቀዋል። መልካም ዕድል!"
-            )
-        except Exception as e:
-            print(f"ለደንበኛው መልእክት መላክ አልተቻለም: {e}")
+        if text.startswith('/start'):
+            reply_markup = {
+                "inline_keyboard": [[
+                    {"text": "🚗 መኪና እቁብ/ሎተሪ ቁረጥ", "web_app": {"url": WEB_APP_URL}}
+                ]]
+            }
+            payload = {
+                'chat_id': chat_id,
+                'text': "እንኳን ወደ Getachew Fikadu Car Ekub በደህና መጡ! ቁጥር ለመቁረጥ ከታች ያለውን ቁልፍ ይጫኑ፡",
+                'reply_markup': json.dumps(reply_markup)
+            }
+            requests.post(f"{TELEGRAM_API}/sendMessage", json=payload)
 
-    elif action == "reject":
-        cursor.execute(f"UPDATE tickets SET status = 'available', user_id=NULL, user_name=NULL, user_phone=NULL, referrer=NULL WHERE number IN ({placeholders})", numbers)
-        conn.commit()
+    # Admin Inline Button Clicks (Approve/Reject)
+    if 'callback_query' in update:
+        cb = update['callback_query']
+        cb_id = cb['id']
+        data = cb['data'].split('_')
+        action = data[0]
+        user_id = data[1]
+        numbers = list(map(int, data[2].split('-')))
+        placeholders = ','.join(['?'] * len(numbers))
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if action == "approve":
+            cursor.execute(f"UPDATE tickets SET status = 'sold' WHERE number IN ({placeholders})", numbers)
+            conn.commit()
+            msg = f"✅ ቲኬት ቁጥር {numbers} በስኬት ጸድቋል!"
+            user_msg = f"🎉 እንኳን ደስ አለዎት! የቆረጧቸው ቲኬቶች (ቁጥር፡ {numbers}) በስኬት ጸድቀዋል።"
+        else:
+            cursor.execute(f"UPDATE tickets SET status = 'available', user_id=NULL, user_name=NULL, user_phone=NULL, referrer=NULL WHERE number IN ({placeholders})", numbers)
+            conn.commit()
+            msg = f"❌ ቲኬት ቁጥር {numbers} ውድቅ ተደርጓል!"
+            user_msg = f"⚠️ የላኩት የክፍያ ደረሰኝ ውድቅ ስለተደረገ የተያዙት ቁጥሮች ({numbers}) ነፃ ሆነዋል።"
+
         conn.close()
 
-        await query.edit_message_caption(caption=f"❌ **ቲኬት ቁጥር {numbers} ውድቅ ተደርጓል (ከስርዓቱ ተሰርዟል)!**") if query.message.photo else await query.edit_message_text(text=f"❌ **ቲኬት ቁጥር {numbers} ውድቅ ተደርጓል (ከስርዓቱ ተሰርዟል)!**")
+        # Answer Callback & Send Notification
+        requests.post(f"{TELEGRAM_API}/answerCallbackQuery", json={'callback_query_id': cb_id, 'text': msg})
+        requests.post(f"{TELEGRAM_API}/sendMessage", json={'chat_id': ADMIN_CHAT_ID, 'text': msg})
+        requests.post(f"{TELEGRAM_API}/sendMessage", json={'chat_id': user_id, 'text': user_msg})
 
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"⚠️ **ማሳወቂያ፡**\n\nየላኩት የክፍያ ደረሰኝ ውድቅ ስለተደረገ የተያዙት ቁጥሮች ({numbers}) ተመልሰው ነፃ ሆነዋል። እባክዎን እንደገና ይሞክሩ።"
-            )
-        except Exception as e:
-            print(f"ለደንበኛው መልእክት መላክ አልተቻለም: {e}")
+    return 'OK', 200
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🚗 መኪና እቁብ/ሎተሪ ቁረጥ", web_app={"url": WEB_APP_URL})]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("እንኳን ወደ Getachew Fikadu Car Ekub በደህና መጡ! ቁጥር ለመቁረጥ ከታች ያለውን ቁልፍ ይጫኑ፡", reply_markup=reply_markup)
-
-# --- TELEGRAM BOT THREAD RUNNER ---
-def start_bot_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CallbackQueryHandler(handle_admin_action))
-    
-    print("🤖 Telegram Bot is starting polling...")
-    loop.run_until_complete(application.initialize())
-    loop.run_until_complete(application.start())
-    loop.run_until_complete(application.updater.start_polling())
-    loop.run_forever()
-
-# --- MAIN RUNNER ---
 if __name__ == '__main__':
-    from threading import Thread
-    
-    # 1. ቦቱን በተለየ ሰላማዊ Thread ማነሳት
-    bot_thread = Thread(target=start_bot_thread, daemon=True)
-    bot_thread.start()
-
-    # 2. Flask Backend ን በዋናው መስመር ማነሳት
     port = int(os.environ.get("PORT", 5000))
-    print(f"🚀 Flask Server running on port {port}...")
     app.run(host='0.0.0.0', port=port)
