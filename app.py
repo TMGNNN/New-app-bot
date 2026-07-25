@@ -171,10 +171,34 @@ def submit_order():
     except Exception as e:
         return jsonify({"success": False, "message": f"የሰርቨር ስህተት: {str(e)}"}), 500
 
-# Webhook Endpoint for Telegram Bot Updates (Approve/Reject Handlers)
+# Webhook Endpoint for Telegram Bot Updates
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.get_json() or {}
+    
+    # 1. ተጠቃሚው /start ሲል መልስ ለመስጠት
+    if "message" in update and "text" in update["message"]:
+        chat_id = update["message"]["chat"]["id"]
+        text = update["message"]["text"]
+        
+        if text.startswith("/start"):
+            welcome_msg = (
+                "👋 *እንኳን ወደ ጌታቸው ፈቃዱ የመኪና እቁብ/ሎተሪ በደህና መጡ!*\n\n"
+                "ቲኬት ለመቁረጥ እና ነፃ ቁጥሮችን ለመመልከት ከታች ያለውን **'🚗 መኪና እቁብ/ሎተሪ ቁረጥ'** የሚለውን በተን ይጫኑ።"
+            )
+            reply_markup = {
+                "inline_keyboard": [[
+                    {"text": "🚗 መኪና እቁብ/ሎተሪ ቁረጥ", "web_app": {"url": WEB_APP_URL}}
+                ]]
+            }
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": welcome_msg,
+                "parse_mode": "Markdown",
+                "reply_markup": reply_markup
+            })
+
+    # 2. አድሚኑ Approve / Reject ሲል
     if "callback_query" in update:
         query = update["callback_query"]
         callback_data = query.get("data", "").split('_')
@@ -208,7 +232,3 @@ def telegram_webhook():
             })
 
     return jsonify({"status": "ok"})
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
