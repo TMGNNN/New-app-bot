@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import logging
 import time
+from io import BytesIO
 from urllib.parse import parse_qsl
 import requests
 import psycopg2
@@ -13,6 +14,12 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
+# PDF and QR Code Libraries
+import qrcode
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
 
 # --- LOGGING SETUP ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -77,10 +84,10 @@ def init_db():
 
 init_db()
 
-# --- SECURITY: HMAC Validation for InitData ---
+# --- SECURITY: HMAC Validation ---
 def verify_telegram_init_data(init_data: str) -> bool:
     if not BOT_TOKEN or not init_data:
-        return True  # Dev fallback if BOT_TOKEN is not set
+        return True
     try:
         parsed_data = dict(parse_qsl(init_data))
         if "hash" not in parsed_data:
@@ -96,6 +103,60 @@ def verify_telegram_init_data(init_data: str) -> bool:
     except Exception as e:
         logging.error(f"InitData verification error: {e}")
         return False
+
+# --- PDF GENERATOR FUNCTION ---
+def generate_pdf_ticket(user_name, numbers, user_id):
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    
+    # Title & Header
+    p.setFillColor(colors.HexColor("#1c1e21"))
+    p.rect(0, 680, 612, 120, fill=True, stroke=False)
+    
+    p.setFillColor(colors.HexColor("#f1c40f"))
+    p.setFont("Helvetica-Bold", 22)
+    p.drawString(40, 740, "GETACHEW FIKADU CAR EKUB")
+    
+    p.setFillColor(colors.white)
+    p.setFont("Helvetica", 12)
+    p.drawString(40, 715, "OFFICIAL CAR RAFFLE TICKET (BYD YUAN UP)")
+    
+    # Ticket Details
+    p.setFillColor(colors.black)
+    p.setFont("Helvetica-Bold", 14)
+    p.drawString(40, 640, f"Customer Name: {user_name}")
+    p.drawString(40, 615, f"Telegram ID: {user_id}")
+    p.drawString(40, 590, f"Ticket Numbers: {', '.join(map(str, numbers))}")
+    p.drawString(40, 565, f"Total Paid: {len(numbers) * 3000:,} Birr")
+    p.drawString(40, 540, f"Status: CONFIRMED & APPROVED")
+
+    # Generate QR Code for Verification
+    qr_data = f"CarEkub|User:{user_id}|Tickets:{'-'.join(map(str, numbers))}"
+    qr = qrcode.make(qr_data)
+    qr_buffer = BytesIO()
+    qr.save(qr_buffer, format='PNG')
+    qr_buffer.seek(0)
+    
+    # Draw QR code on PDF
+    p.drawInlineImage(qr_buffer, 400, 520, width=150, height=150)
+
+    # Footer
+    p.setStrokeColor(colors.gray)
+    p.line(40, 480, 570, 480)
+    p.setFont("Helvetica-Oblique", 10)
+    p.setFillColor(colors.gray)
+    p.drawString(40, 460, "Thank you for participating! Please keep this ticket for the live winner draw.")
+
+    p.showPage()
+    p.save()
+    buffer.seek(0)
+    return buffer
+
+def send_pdf_document(chat_id, pdf_buffer, filename="Car_Ekub_Ticket.pdf"):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    files = {'document': (filename, pdf_buffer, 'application/pdf')}
+    payload = {'chat_id': chat_id, 'caption': "🎉 **እንኳን ደስ አለዎት!**\nየተገዙት ቲኬቶች ኦፊሴላዊ PDF ደረሰኝ ከታች ተያይዟል።"}
+    requests.post(url, data=payload, files=files)
 
 # --- HELPER FUNCTIONS ---
 def send_admin_notification(numbers, user_name, user_phone, referrer, user_id, receipt_b64):
@@ -168,7 +229,6 @@ def get_tickets():
         logging.error(f"Error fetching tickets: {e}")
         return jsonify({}), 200
 
-# Server-Sent Events (SSE) for Real-Time Sync
 @app.route('/api/stream-tickets')
 def stream_tickets():
     def event_stream():
@@ -195,9 +255,8 @@ def submit_order():
     data = request.json or {}
     init_data = data.get('initData', '')
 
-    # Validate initData HMAC signature
     if init_data and not verify_telegram_init_data(init_data):
-        return jsonify({"success": False, "message": "የቴሌግራም ጥያቄ ማረጋገጫ አልተሳካም (Invalid Request)!"}), 403
+        return jsonify({"success": False, "message": "የቴሌግራም ጥያቄ ማረጋገጫ አልተሳካም!"}), 403
 
     selected_numbers = data.get('numbers', [])
     user_id = data.get('user_id')
@@ -205,9 +264,6 @@ def submit_order():
     user_phone = data.get('user_phone')
     referrer = data.get('referrer', 'የለም')
     receipt_b64 = data.get('receipt_url')
-
-    if receipt_b64 and len(receipt_b64) > 1.5 * 1024 * 1024:
-        return jsonify({"success": False, "message": "የፎቶው መጠን በጣም ትልቅ ነው! እባክዎን አነስ ያለ ፎቶ ይጠቀሙ።"}), 400
 
     if not selected_numbers:
         return jsonify({"success": False, "message": "ምንም ቁጥር አልተመረጠም!"}), 400
@@ -248,52 +304,6 @@ def submit_order():
         logging.error(f"Error in submit_order: {e}")
         return jsonify({"success": False, "message": "የሰርቨር ስህተት አጋጥሟል"}), 500
 
-@app.route('/api/admin/stats', methods=['GET'])
-def admin_stats():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT status, COUNT(*) as cnt FROM tickets GROUP BY status")
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
-        stats = {'sold': 0, 'pending': 0, 'available': 0}
-        for r in rows:
-            stats[r['status']] = r['cnt']
-
-        revenue = stats['sold'] * 3000
-        return jsonify({
-            "revenue": revenue,
-            "sold": stats['sold'],
-            "pending": stats['pending'],
-            "available": stats['available']
-        })
-    except Exception as e:
-        return jsonify({"revenue": 0, "sold": 0, "pending": 0, "available": 2200})
-
-@app.route('/api/admin/export-csv', methods=['GET'])
-def export_csv():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT number, status, user_id, user_name, referrer FROM tickets ORDER BY number ASC")
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-
-        csv_data = "Number,Status,User ID,User Name,Referrer\n"
-        for r in rows:
-            csv_data += f"{r['number']},{r['status']},{r['user_id'] or ''},{r['user_name'] or ''},{r['referrer'] or ''}\n"
-
-        return Response(
-            csv_data,
-            mimetype="text/csv",
-            headers={"Content-disposition": "attachment; filename=ekub_tickets_report.csv"}
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.get_json() or {}
@@ -317,24 +327,32 @@ def telegram_webhook():
                 placeholders = ','.join(['%s'] * len(numbers))
 
                 if action == "approve":
+                    cursor.execute(f"SELECT user_name FROM tickets WHERE number = %s", (numbers[0],))
+                    u_row = cursor.fetchone()
+                    user_name = u_row['user_name'] if u_row else "Customer"
+
                     cursor.execute(f"UPDATE tickets SET status = 'sold' WHERE number IN ({placeholders})", numbers)
                     conn.commit()
-                    user_msg = f"🎉 **እንኳን ደስ አለዎት!**\n\nየቆረጧቸው ቲኬቶች (ቁጥር፡ {numbers}) በስኬት ጸድቀዋል።"
-                    admin_status_text = f"\n\n✅ **Approved by Admin**"
+                    
+                    # Generate and send PDF Ticket
+                    pdf_buf = generate_pdf_ticket(user_name, numbers, user_id)
+                    send_pdf_document(user_id, pdf_buf)
+                    
+                    admin_status_text = f"\n\n✅ **Approved & PDF Ticket Sent**"
+
                 elif action == "reject":
                     cursor.execute(f"UPDATE tickets SET status = 'available', user_id=NULL, user_name=NULL, user_phone=NULL, referrer=NULL WHERE number IN ({placeholders})", numbers)
                     conn.commit()
-                    user_msg = f"⚠️ **ማሳወቂያ፡**\n\nየላኩት የክፍያ ደረሰኝ ውድቅ ስለተደረገ የተያዙት ቁጥሮች ({numbers}) ተመልሰው ነፃ ሆነዋል።"
+                    
+                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+                        "chat_id": user_id,
+                        "text": f"⚠️ **ማሳወቂያ፡**\n\nየላኩት የክፍያ ደረሰኝ ውድቅ ስለተደረገ የተያዙት ቁጥሮች ({numbers}) ተመልሰው ነፃ ሆነዋል።",
+                        "parse_mode": "Markdown"
+                    })
                     admin_status_text = f"\n\n❌ **Rejected by Admin**"
 
                 cursor.close()
                 conn.close()
-
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                    "chat_id": user_id,
-                    "text": user_msg,
-                    "parse_mode": "Markdown"
-                })
 
                 current_caption = message.get("caption") or message.get("text") or ""
                 updated_text = current_caption + admin_status_text
@@ -344,14 +362,6 @@ def telegram_webhook():
                         "chat_id": chat_id,
                         "message_id": message_id,
                         "caption": updated_text,
-                        "parse_mode": "Markdown",
-                        "reply_markup": {"inline_keyboard": []}
-                    })
-                else:
-                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText", json={
-                        "chat_id": chat_id,
-                        "message_id": message_id,
-                        "text": updated_text,
                         "parse_mode": "Markdown",
                         "reply_markup": {"inline_keyboard": []}
                     })
