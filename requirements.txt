@@ -1,6 +1,6 @@
 Flask
 flask-cors
-requests
-python-telegram-bot
+Flask-Limiter
 psycopg2-binary
+requests
 gunicorn
