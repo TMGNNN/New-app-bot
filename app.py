@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")[cite: 2]
+ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")
 
 missing_vars = []
 if not BOT_TOKEN: missing_vars.append("BOT_TOKEN")
@@ -31,10 +31,10 @@ if missing_vars:
 
 app = Flask(__name__)
 
-# CORS Security (የተፈቀደው ዶሜይን ብቻ)
+# CORS Security
 CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org"]}})
 
-# Rate Limiting (ለSpam መከላከያ)
+# Rate Limiting
 limiter = Limiter(
     get_remote_address,
     app=app,
@@ -88,7 +88,7 @@ def verify_telegram_init_data(init_data_str):
     if not init_data_str or not BOT_TOKEN:
         return False
     try:
-        from urllib.parse import parse_qs, unquote
+        from urllib.parse import parse_qs
         parsed_data = parse_qs(init_data_str)
         hash_from_telegram = parsed_data.get('hash', [None])[0]
         if not hash_from_telegram:
@@ -190,7 +190,6 @@ def submit_order():
     referrer = data.get('referrer', 'የለም')
     receipt_b64 = data.get('receipt_url')
 
-    # Base64 Receipt Size Check (Max 1MB limit check)
     if receipt_b64 and len(receipt_b64) > 1.5 * 1024 * 1024:
         return jsonify({"success": False, "message": "የፎቶው መጠን በጣም ትልቅ ነው! እባክዎን አነስ ያለ ፎቶ ይጠቀሙ።"}), 400
 
@@ -269,14 +268,12 @@ def telegram_webhook():
                 cursor.close()
                 conn.close()
 
-                # 1. Notify User
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                     "chat_id": user_id,
                     "text": user_msg,
                     "parse_mode": "Markdown"
                 })
 
-                # 2. Update Admin Message (Remove Callback Buttons & Add Status Badge)
                 current_caption = message.get("caption") or message.get("text") or ""
                 updated_text = current_caption + admin_status_text
 
@@ -286,7 +283,7 @@ def telegram_webhook():
                         "message_id": message_id,
                         "caption": updated_text,
                         "parse_mode": "Markdown",
-                        "reply_markup": {"inline_keyboard": []} # Remove Buttons
+                        "reply_markup": {"inline_keyboard": []}
                     })
                 else:
                     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText", json={
@@ -294,7 +291,7 @@ def telegram_webhook():
                         "message_id": message_id,
                         "text": updated_text,
                         "parse_mode": "Markdown",
-                        "reply_markup": {"inline_keyboard": []} # Remove Buttons
+                        "reply_markup": {"inline_keyboard": []}
                     })
 
             except Exception as e:
