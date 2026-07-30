@@ -7,19 +7,16 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# --- CONFIGURATION FROM ENVIRONMENT VARIABLES ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")[cite: 2]
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 app = Flask(__name__)
 CORS(app)
 
-# --- DATABASE SETUP (PostgreSQL / Supabase) ---
 def get_db_connection():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return conn
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
     if not DATABASE_URL:
@@ -30,7 +27,6 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # የቲኬቶች ቴብል መፍጠር
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 number INTEGER PRIMARY KEY,
@@ -43,7 +39,6 @@ def init_db():
             );
         ''')
         
-        # 2200 ቁጥሮች መኖራቸውን ማረጋገጥ
         cursor.execute("SELECT COUNT(*) FROM tickets;")
         result = cursor.fetchone()
         count = result['count'] if result else 0
@@ -59,10 +54,8 @@ def init_db():
     except Exception as e:
         print(f"❌ የዳታቤዝ ስህተት: {e}")
 
-# አፑ ሲነሳ ዳታቤዙን ማዘጋጀት
 init_db()
 
-# --- HELPER FUNCTIONS ---
 def send_admin_notification_via_api(numbers, user_name, user_phone, referrer, user_id, receipt_b64):
     nums_str = ", ".join(map(str, numbers))
     total_price = len(numbers) * 3000
@@ -111,8 +104,6 @@ def send_admin_notification_via_api(numbers, user_name, user_phone, referrer, us
     }
     requests.post(url_send_msg, json=payload)
 
-# --- API ENDPOINTS ---
-
 @app.route('/api/get-tickets', methods=['GET'])
 def get_tickets():
     try:
@@ -125,6 +116,20 @@ def get_tickets():
         
         tickets_status = {row['number']: row['status'] for row in rows}
         return jsonify(tickets_status)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ለተጠቃሚው የያዛቸውን ትኬቶች የሚያመጣ አዲስ API Endpoint
+@app.route('/api/my-tickets/<user_id>', methods=['GET'])
+def get_my_tickets(user_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT number, status, referrer FROM tickets WHERE user_id = %s", (str(user_id),))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return jsonify(rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -146,22 +151,27 @@ def submit_order():
         cursor = conn.cursor()
 
         placeholders = ','.join(['%s'] * len(selected_numbers))
-        cursor.execute(f"SELECT number FROM tickets WHERE number IN ({placeholders}) AND status != 'available'", selected_numbers)
-        taken = cursor.fetchall()
-
-        if taken:
-            cursor.close()
-            conn.close()
-            taken_nums = [t['number'] for t in taken]
-            return jsonify({"success": False, "message": f"እነዚህ ቁጥሮች ቀደም ብለው ተይዘዋል፡ {taken_nums}"}), 400
-
+        
+        # Atomic Update - ነፃ የሆኑትን ብቻ ወደ pending ይቀይራል
         cursor.execute(f'''
             UPDATE tickets 
             SET status = 'pending', user_id = %s, user_name = %s, user_phone = %s, referrer = %s
-            WHERE number IN ({placeholders})
+            WHERE number IN ({placeholders}) AND status = 'available'
+            RETURNING number;
         ''', [user_id, user_name, user_phone, referrer] + selected_numbers)
 
+        updated_rows = cursor.fetchall()
         conn.commit()
+
+        # የትኞቹ ቁጥሮች በስኬት እንደተያዙ ማረጋገጥ
+        if len(updated_rows) != len(selected_numbers):
+            cursor.close()
+            conn.close()
+            return jsonify({
+                "success": False, 
+                "message": "ከተመረጡት ቁጥሮች መካከል የተወሰኑት አሁን ባለው ሰዓት በሌላ ሰው ተይዘዋል! እባክዎን ገፁን Refresh አድርገው በድጋሚ ይሞክሩ።"
+            }), 400
+
         cursor.close()
         conn.close()
 
@@ -171,36 +181,12 @@ def submit_order():
     except Exception as e:
         return jsonify({"success": False, "message": f"የሰርቨር ስህተት: {str(e)}"}), 500
 
-# Webhook Endpoint for Telegram Bot Updates
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.get_json() or {}
-    
-    # 1. ተጠቃሚው /start ሲል መልስ ለመስጠት
-    if "message" in update and "text" in update["message"]:
-        chat_id = update["message"]["chat"]["id"]
-        text = update["message"]["text"]
-        
-        if text.startswith("/start"):
-            welcome_msg = (
-                "👋 *እንኳን ወደ ጌታቸው ፈቃዱ የመኪና እቁብ/ሎተሪ በደህና መጡ!*\n\n"
-                "ቲኬት ለመቁረጥ እና ነፃ ቁጥሮችን ለመመልከት ከታች ያለውን **'🚗 መኪና እቁብ/ሎተሪ ቁረጥ'** የሚለውን በተን ይጫኑ።"
-            )
-            reply_markup = {
-                "inline_keyboard": [[
-                    {"text": "🚗 መኪና እቁብ/ሎተሪ ቁረጥ", "web_app": {"url": WEB_APP_URL}}
-                ]]
-            }
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                "chat_id": chat_id,
-                "text": welcome_msg,
-                "parse_mode": "Markdown",
-                "reply_markup": reply_markup
-            })
-
-    # 2. አድሚኑ Approve / Reject ሲል
     if "callback_query" in update:
         query = update["callback_query"]
+        callback_id = query.get("id")
         callback_data = query.get("data", "").split('_')
         
         if len(callback_data) >= 3:
@@ -216,15 +202,23 @@ def telegram_webhook():
                 cursor.execute(f"UPDATE tickets SET status = 'sold' WHERE number IN ({placeholders})", numbers)
                 conn.commit()
                 msg = f"🎉 **እንኳን ደስ አለዎት!**\n\nየቆረጧቸው ቲኬቶች (ቁጥር፡ {numbers}) በስኬት ጸድቀዋል። መልካም ዕድል!"
+                ans_text = "በስኬት ጸድቋል!"
             elif action == "reject":
                 cursor.execute(f"UPDATE tickets SET status = 'available', user_id=NULL, user_name=NULL, user_phone=NULL, referrer=NULL WHERE number IN ({placeholders})", numbers)
                 conn.commit()
                 msg = f"⚠️ **ማሳወቂያ፡**\n\nየላኩት የክፍያ ደረሰኝ ውድቅ ስለተደረገ የተያዙት ቁጥሮች ({numbers}) ተመልሰው ነፃ ሆነዋል።"
+                ans_text = "ውድቅ ተደርጓል!"
 
             cursor.close()
             conn.close()
 
-            # ለተጠቃሚው ማሳወቂያ መላክ
+            # 1. ለቴሌግራም Callback አጭር ምላሽ መስጠት (Loading Spinner እንዲጠፋ)
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={
+                "callback_query_id": callback_id,
+                "text": ans_text
+            })
+
+            # 2. ለተጠቃሚው ማሳወቂያ መላክ
             requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                 "chat_id": user_id,
                 "text": msg,
@@ -232,3 +226,7 @@ def telegram_webhook():
             })
 
     return jsonify({"status": "ok"})
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
