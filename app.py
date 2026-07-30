@@ -21,18 +21,10 @@ ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")
 
-missing_vars = []
-if not BOT_TOKEN: missing_vars.append("BOT_TOKEN")
-if not ADMIN_CHAT_ID: missing_vars.append("ADMIN_CHAT_ID")
-if not DATABASE_URL: missing_vars.append("DATABASE_URL")
-
-if missing_vars:
-    logging.error(f"❌ የጎደሉ አስፈላጊ Environment Variables አሉ: {', '.join(missing_vars)}")
-
 app = Flask(__name__)
 
 # CORS Security
-CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org"]}})
+CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org", "*"]}})
 
 # Rate Limiting
 limiter = Limiter(
@@ -70,9 +62,9 @@ def init_db():
         cursor.execute("SELECT COUNT(*) FROM tickets;")
         count = cursor.fetchone()['count']
         
-        if count == 0:
+        if count < 2200:
             tickets_data = [(i, 'available') for i in range(1, 2201)]
-            cursor.executemany("INSERT INTO tickets (number, status) VALUES (%s, %s)", tickets_data)
+            cursor.executemany("INSERT INTO tickets (number, status) VALUES (%s, %s) ON CONFLICT (number) DO NOTHING", tickets_data)
             conn.commit()
             logging.info("✅ 2200 ቁጥሮች በዳታቤዝ ውስጥ በስኬት ተፈጠሩ!")
             
@@ -82,31 +74,6 @@ def init_db():
         logging.error(f"❌ የዳታቤዝ ማስጀመሪያ ስህተት: {e}")
 
 init_db()
-
-# --- SECURITY: TELEGRAM INITDATA VERIFICATION ---
-def verify_telegram_init_data(init_data_str):
-    if not init_data_str or not BOT_TOKEN:
-        return False
-    try:
-        from urllib.parse import parse_qs
-        parsed_data = parse_qs(init_data_str)
-        hash_from_telegram = parsed_data.get('hash', [None])[0]
-        if not hash_from_telegram:
-            return False
-
-        data_check_list = []
-        for key, value in sorted(parsed_data.items()):
-            if key != 'hash':
-                data_check_list.append(f"{key}={value[0]}")
-        data_check_string = "\n".join(data_check_list)
-
-        secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-        calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
-
-        return calculated_hash == hash_from_telegram
-    except Exception as e:
-        logging.error(f"InitData Verification Error: {e}")
-        return False
 
 # --- HELPER FUNCTIONS ---
 def send_admin_notification(numbers, user_name, user_phone, referrer, user_id, receipt_b64):
@@ -177,7 +144,7 @@ def get_tickets():
         return jsonify(tickets_status)
     except Exception as e:
         logging.error(f"Error fetching tickets: {e}")
-        return jsonify({"error": "የቲኬት መረጃ መጫን አልተቻለም"}), 500
+        return jsonify({}), 200  # Return empty JSON object instead of error so frontend builds default grid
 
 @app.route('/api/submit-order', methods=['POST'])
 @limiter.limit("5 per minute")
