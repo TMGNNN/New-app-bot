@@ -9,7 +9,7 @@ from flask_cors import CORS
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
-WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")[cite: 2]
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://tangerine-entremet-b361e6.netlify.app/")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 app = Flask(__name__)
