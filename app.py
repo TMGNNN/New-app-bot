@@ -109,7 +109,6 @@ def generate_pdf_ticket(user_name, numbers, user_id):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=letter)
     
-    # Title & Header
     p.setFillColor(colors.HexColor("#1c1e21"))
     p.rect(0, 680, 612, 120, fill=True, stroke=False)
     
@@ -121,7 +120,6 @@ def generate_pdf_ticket(user_name, numbers, user_id):
     p.setFont("Helvetica", 12)
     p.drawString(40, 715, "OFFICIAL CAR RAFFLE TICKET (BYD YUAN UP)")
     
-    # Ticket Details
     p.setFillColor(colors.black)
     p.setFont("Helvetica-Bold", 14)
     p.drawString(40, 640, f"Customer Name: {user_name}")
@@ -130,17 +128,14 @@ def generate_pdf_ticket(user_name, numbers, user_id):
     p.drawString(40, 565, f"Total Paid: {len(numbers) * 3000:,} Birr")
     p.drawString(40, 540, f"Status: CONFIRMED & APPROVED")
 
-    # Generate QR Code for Verification
     qr_data = f"CarEkub|User:{user_id}|Tickets:{'-'.join(map(str, numbers))}"
     qr = qrcode.make(qr_data)
     qr_buffer = BytesIO()
     qr.save(qr_buffer, format='PNG')
     qr_buffer.seek(0)
     
-    # Draw QR code on PDF
     p.drawInlineImage(qr_buffer, 400, 520, width=150, height=150)
 
-    # Footer
     p.setStrokeColor(colors.gray)
     p.line(40, 480, 570, 480)
     p.setFont("Helvetica-Oblique", 10)
@@ -304,6 +299,57 @@ def submit_order():
         logging.error(f"Error in submit_order: {e}")
         return jsonify({"success": False, "message": "የሰርቨር ስህተት አጋጥሟል"}), 500
 
+@app.route('/api/admin/stats', methods=['GET'])
+def admin_stats():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT status, COUNT(*) as count FROM tickets GROUP BY status")
+        rows = cursor.fetchall()
+        
+        stats = {"available": 0, "pending": 0, "sold": 0}
+        for row in rows:
+            if row['status'] in stats:
+                stats[row['status']] = row['count']
+                
+        revenue = stats['sold'] * 3000
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "sold": stats['sold'],
+            "pending": stats['pending'],
+            "available": stats['available'],
+            "revenue": revenue
+        })
+    except Exception as e:
+        logging.error(f"Admin stats error: {e}")
+        return jsonify({"success": False, "message": "Error loading stats"}), 500
+
+@app.route('/api/admin/export-csv', methods=['GET'])
+def export_csv():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT number, status, user_id, user_name, referrer FROM tickets ORDER BY number ASC")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        csv_data = "Number,Status,User ID,User Name,Referrer\n"
+        for r in rows:
+            csv_data += f"{r['number']},{r['status']},{r['user_id'] or ''},{r['user_name'] or ''},{r['referrer'] or ''}\n"
+            
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=car_ekub_tickets.csv"}
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.get_json() or {}
@@ -334,7 +380,6 @@ def telegram_webhook():
                     cursor.execute(f"UPDATE tickets SET status = 'sold' WHERE number IN ({placeholders})", numbers)
                     conn.commit()
                     
-                    # Generate and send PDF Ticket
                     pdf_buf = generate_pdf_ticket(user_name, numbers, user_id)
                     send_pdf_document(user_id, pdf_buf)
                     
@@ -377,52 +422,3 @@ def telegram_webhook():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-@app.route('/api/admin/stats', methods=['GET'])
-def admin_stats():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT status, COUNT(*) as count FROM tickets GROUP BY status")
-        rows = cursor.fetchall()
-        
-        stats = {"available": 0, "pending": 0, "sold": 0}
-        for row in rows:
-            if row['status'] in stats:
-                stats[row['status']] = row['count']
-                
-        revenue = stats['sold'] * 3000
-        
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            "sold": stats['sold'],
-            "pending": stats['pending'],
-            "available": stats['available'],
-            "revenue": revenue
-        })
-    except Exception as e:
-        logging.error(f"Admin stats error: {e}")
-        return jsonify({"success": False, "message": "Error loading stats"}), 500
-        @app.route('/api/admin/export-csv', methods=['GET'])
-def export_csv():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT number, status, user_id, user_name, referrer FROM tickets ORDER BY number ASC")
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        csv_data = "Number,Status,User ID,User Name,Referrer\n"
-        for r in rows:
-            csv_data += f"{r['number']},{r['status']},{r['user_id'] or ''},{r['user_name'] or ''},{r['referrer'] or ''}\n"
-            
-        return Response(
-            csv_data,
-            mimetype="text/csv",
-            headers={"Content-Disposition": "attachment;filename=car_ekub_tickets.csv"}
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
