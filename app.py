@@ -377,3 +377,52 @@ def telegram_webhook():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+@app.route('/api/admin/stats', methods=['GET'])
+def admin_stats():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT status, COUNT(*) as count FROM tickets GROUP BY status")
+        rows = cursor.fetchall()
+        
+        stats = {"available": 0, "pending": 0, "sold": 0}
+        for row in rows:
+            if row['status'] in stats:
+                stats[row['status']] = row['count']
+                
+        revenue = stats['sold'] * 3000
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "sold": stats['sold'],
+            "pending": stats['pending'],
+            "available": stats['available'],
+            "revenue": revenue
+        })
+    except Exception as e:
+        logging.error(f"Admin stats error: {e}")
+        return jsonify({"success": False, "message": "Error loading stats"}), 500
+        @app.route('/api/admin/export-csv', methods=['GET'])
+def export_csv():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT number, status, user_id, user_name, referrer FROM tickets ORDER BY number ASC")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        csv_data = "Number,Status,User ID,User Name,Referrer\n"
+        for r in rows:
+            csv_data += f"{r['number']},{r['status']},{r['user_id'] or ''},{r['user_name'] or ''},{r['referrer'] or ''}\n"
+            
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=car_ekub_tickets.csv"}
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
