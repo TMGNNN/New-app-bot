@@ -6,3 +6,5 @@ requests
 gunicorn
 reportlab
 qrcode
+PyJWT
+telethon
