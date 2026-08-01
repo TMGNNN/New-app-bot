@@ -5,24 +5,20 @@ import hmac
 import hashlib
 import logging
 import time
-import asyncio
+import io
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from urllib.parse import parse_qsl
 
 import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2.pool import ThreadedConnectionPool
-
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import jwt
-
-# Telethon integration
-from telethon import TelegramClient
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 
 # --- LOGGING SETUP ---
 log_handler = RotatingFileHandler('app.log', maxBytes=5*1024*1024, backupCount=3)
@@ -36,12 +32,9 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 WEBHOOK_SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET_TOKEN")
-JWT_SECRET = os.environ.get("JWT_SECRET")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-jwt-key")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "*")
-
-TELEGRAM_API_ID = os.environ.get("TELEGRAM_API_ID")
-TELEGRAM_API_HASH = os.environ.get("TELEGRAM_API_HASH")
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org"]}})
@@ -73,11 +66,15 @@ def release_db_connection(conn):
 sse_clients = []
 
 def notify_clients(event_data):
+    dead_clients = []
     for q in sse_clients:
         try:
             q.append(event_data)
         except Exception:
-            pass
+            dead_clients.append(q)
+    for dc in dead_clients:
+        if dc in sse_clients:
+            sse_clients.remove(dc)
 
 def verify_telegram_data(init_data: str) -> bool:
     if not BOT_TOKEN or not init_data:
@@ -157,7 +154,7 @@ def cleanup_expired_pendings():
         
         cursor.execute("""
             UPDATE tickets 
-            SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL
+            SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL, receipt_file_id = NULL
             WHERE status = 'pending' AND updated_at < %s
             RETURNING number;
         """, (fifteen_mins_ago,))
@@ -178,19 +175,70 @@ def cleanup_expired_pendings():
 
 init_db()
 
-def admin_required(f):
-    def decorator(*args, **kwargs):
-        token = request.headers.get("Authorization")
-        if not token:
-            return jsonify({"message": "Token አልተገኘም!"}), 401
-        try:
-            token = token.split(" ")[1] if " " in token else token
-            jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        except Exception:
-            return jsonify({"message": "ያልተፈቀደ Token!"}), 401
-        return f(*args, **kwargs)
-    decorator.__name__ = f.__name__
-    return decorator
+def send_telegram_admin_notification(user_name, user_phone, selected_numbers, receipt_base64):
+    if not (ADMIN_CHAT_ID and BOT_TOKEN):
+        return None
+
+    nums_str = ",".join(map(str, selected_numbers))
+    caption = (
+        f"🆕 **አዲስ ትዕዛዝ ተልኳል!**\n\n"
+        f"👤 **ስም:** {user_name}\n"
+        f"📞 **ስልክ:** {user_phone}\n"
+        f"🎟️ **ቁጥሮች:** {nums_str}"
+    )
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ ፅድቅ (Approve)", "callback_data": f"app_{nums_str}"},
+                {"text": "❌ ሰርዝ (Reject)", "callback_data": f"rej_{nums_str}"}
+            ]
+        ]
+    }
+
+    file_id = None
+    try:
+        if receipt_base64 and "," in receipt_base64:
+            header, encoded = receipt_base64.split(",", 1)
+            image_data = base64.b64decode(encoded)
+            files = {'photo': ('receipt.jpg', io.BytesIO(image_data), 'image/jpeg')}
+            payload = {
+                'chat_id': ADMIN_CHAT_ID,
+                'caption': caption,
+                'parse_mode': 'Markdown',
+                'reply_markup': json.dumps(reply_markup)
+            }
+            res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=payload, files=files)
+            res_json = res.json()
+            if res_json.get('ok'):
+                photos = res_json['result'].get('photo', [])
+                if photos:
+                    file_id = photos[-1]['file_id']
+        else:
+            payload = {
+                'chat_id': ADMIN_CHAT_ID,
+                'text': caption,
+                'parse_mode': 'Markdown',
+                'reply_markup': reply_markup
+            }
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+    except Exception as e:
+        logger.error(f"Failed to send admin notification: {e}")
+
+    return file_id
+
+# 📩 ለተጠቃሚው አውቶማቲክ የቴሌግራም መልእክት መላኪያ ፈንክሽን
+def send_user_notification(user_id, text):
+    if not BOT_TOKEN or not user_id or not str(user_id).isdigit():
+        return
+    try:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+            "chat_id": user_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        })
+    except Exception as e:
+        logger.error(f"Failed to notify user {user_id}: {e}")
 
 # --- API ENDPOINTS ---
 
@@ -203,14 +251,21 @@ def stream():
     def event_stream():
         client_queue = []
         sse_clients.append(client_queue)
+        last_ping = time.time()
         try:
             while True:
                 if client_queue:
                     data = client_queue.pop(0)
                     yield f"data: {json.dumps(data)}\n\n"
+                
+                if time.time() - last_ping > 15:
+                    yield ": ping\n\n"
+                    last_ping = time.time()
+                    
                 time.sleep(1)
         except GeneratorExit:
-            sse_clients.remove(client_queue)
+            if client_queue in sse_clients:
+                sse_clients.remove(client_queue)
 
     return Response(event_stream(), content_type='text/event-stream')
 
@@ -226,102 +281,34 @@ def get_tickets():
         cursor.close()
         return jsonify({row['number']: row['status'] for row in rows})
     except Exception as e:
+        logger.error(f"Get tickets error: {e}")
         return jsonify({}), 500
     finally:
         if conn:
             release_db_connection(conn)
 
-# 🔍 ADMIN SEARCH (በስም፣ በስልክ፣ በቲኬት ቁጥር)
-@app.route('/api/admin/search', methods=['GET'])
-@admin_required
-def admin_search():
-    query = request.args.get('q', '')
-    if not query:
-        return jsonify([])
+@app.route('/api/my-tickets', methods=['GET'])
+def get_my_tickets():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify([]), 400
     
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Check if searching for a specific number or text
-        if query.isdigit():
-            cursor.execute("""
-                SELECT * FROM tickets 
-                WHERE number = %s OR user_phone LIKE %s OR user_id = %s
-            """, (int(query), f"%{query}%", query))
-        else:
-            cursor.execute("""
-                SELECT * FROM tickets 
-                WHERE ILIKE(user_name, %s) OR user_phone LIKE %s
-            """, (f"%{query}%", f"%{query}%"))
-            
-        rows = cursor.fetchall()
-        cursor.close()
-        return jsonify(rows)
-    except Exception as e:
-        logger.error(f"Search Error: {e}")
-        return jsonify([]), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
-
-# 📈 REVENUE CHARTS DATA FOR ADMIN
-@app.route('/api/admin/revenue-chart', methods=['GET'])
-@admin_required
-def get_revenue_chart_data():
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
-            SELECT DATE(updated_at) as date, COUNT(*) * 3000 as daily_revenue
+            SELECT number, status, updated_at 
             FROM tickets 
-            WHERE status = 'sold'
-            GROUP BY DATE(updated_at)
-            ORDER BY date ASC
-            LIMIT 30;
-        """)
+            WHERE user_id = %s AND status IN ('pending', 'sold')
+            ORDER BY updated_at DESC
+        """, (str(user_id),))
         rows = cursor.fetchall()
         cursor.close()
         return jsonify(rows)
     except Exception as e:
+        logger.error(f"Error fetching user tickets: {e}")
         return jsonify([]), 500
-    finally:
-        if conn:
-            release_db_connection(conn)
-
-# 📱 PUSH NOTIFICATION BROADCAST TO USERS
-@app.route('/api/admin/broadcast', methods=['POST'])
-@admin_required
-def broadcast_notification():
-    data = request.json or {}
-    message_text = data.get('message')
-    if not message_text:
-        return jsonify({"success": False, "message": "መልእክት አያስፈልግም!"}), 400
-
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT DISTINCT user_id FROM tickets WHERE user_id IS NOT NULL")
-        users = cursor.fetchall()
-        cursor.close()
-
-        count = 0
-        for u in users:
-            uid = u['user_id']
-            if uid and uid.isdigit():
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                    "chat_id": uid,
-                    "text": message_text,
-                    "parse_mode": "Markdown"
-                })
-                count += 1
-
-        return jsonify({"success": True, "sent_count": count})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         if conn:
             release_db_connection(conn)
@@ -336,7 +323,7 @@ def submit_order():
         return jsonify({"success": False, "message": "Forbidden!"}), 403
 
     selected_numbers = data.get('numbers', [])
-    user_id = data.get('user_id')
+    user_id = str(data.get('user_id', ''))
     user_name = data.get('user_name')
     user_phone = data.get('user_phone')
     referrer = data.get('referrer', 'የለም')
@@ -350,8 +337,10 @@ def submit_order():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        placeholders = ','.join(['%s'] * len(selected_numbers))
-        cursor.execute(f"SELECT number FROM tickets WHERE number IN ({placeholders}) AND status != 'available'", selected_numbers)
+        cursor.execute(
+            "SELECT number FROM tickets WHERE number = ANY(%s) AND status != 'available'",
+            (selected_numbers,)
+        )
         taken = cursor.fetchall()
 
         if taken:
@@ -359,32 +348,100 @@ def submit_order():
             cursor.close()
             return jsonify({"success": False, "message": f"ቁጥሮቹ ቀደም ብለው ተይዘዋል፡ {taken_nums}"}), 400
 
-        cursor.execute(f'''
+        file_id = send_telegram_admin_notification(user_name, user_phone, selected_numbers, receipt_base64)
+
+        cursor.execute('''
             UPDATE tickets 
             SET status = 'pending', user_id = %s, user_name = %s, user_phone = %s, referrer = %s, receipt_file_id = %s, updated_at = CURRENT_TIMESTAMP
-            WHERE number IN ({placeholders})
-        ''', [user_id, user_name, user_phone, referrer, receipt_base64] + selected_numbers)
+            WHERE number = ANY(%s)
+        ''', (user_id, user_name, user_phone, referrer, file_id, selected_numbers))
 
         conn.commit()
         cursor.close()
 
         notify_clients({"type": "UPDATE_NUMBERS", "numbers": selected_numbers, "status": "pending"})
 
-        # Send Telegram alert to Admin
-        if ADMIN_CHAT_ID and BOT_TOKEN:
-            msg = f"🆕 **አዲስ ትዕዛዝ ተልኳል!**\n\n👤 **ስም:** {user_name}\n📞 **ስልክ:** {user_phone}\n🎟️ **ቁጥሮች:** {selected_numbers}"
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                "chat_id": ADMIN_CHAT_ID,
-                "text": msg,
-                "parse_mode": "Markdown"
-            })
-
         return jsonify({"success": True, "message": "ትዕዛዝዎ በስኬት ተልኳል!"})
     except Exception as e:
         if conn: conn.rollback()
+        logger.error(f"Submit order error: {e}")
         return jsonify({"success": False, "message": "የሰርቨር ስህተት"}), 500
     finally:
         if conn: release_db_connection(conn)
+
+# --- TELEGRAM BOT WEBHOOK FOR ADMIN APPROVALS & USER NOTIFICATION ---
+@app.route('/telegram-webhook', methods=['POST'])
+def telegram_webhook():
+    update = request.json or {}
+    if "callback_query" in update:
+        cq = update["callback_query"]
+        cb_data = cq.get("data", "")
+        msg = cq.get("message", {})
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if cb_data.startswith("app_") or cb_data.startswith("rej_"):
+            action, nums_raw = cb_data.split("_", 1)
+            numbers = [int(n) for n in nums_raw.split(",") if n.isdigit()]
+            new_status = "sold" if action == "app" else "available"
+
+            conn = None
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                
+                # በመጀመሪያ የነዚህን ቲኬቶች user_id ማግኘት
+                cursor.execute("SELECT DISTINCT user_id FROM tickets WHERE number = ANY(%s)", (numbers,))
+                user_rows = cursor.fetchall()
+                user_ids = [r['user_id'] for r in user_rows if r['user_id']]
+
+                if new_status == 'sold':
+                    cursor.execute("""
+                        UPDATE tickets 
+                        SET status = 'sold', updated_at = CURRENT_TIMESTAMP
+                        WHERE number = ANY(%s)
+                    """, (numbers,))
+                else:
+                    cursor.execute("""
+                        UPDATE tickets 
+                        SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL, receipt_file_id = NULL, updated_at = CURRENT_TIMESTAMP
+                        WHERE number = ANY(%s)
+                    """, (numbers,))
+
+                conn.commit()
+                cursor.close()
+
+                # 1. ድረ-ገጹ ላይ ላሉ ተጠቃሚዎች ሁሉ የቁጥሩን ሁኔታ ማዘመን (SSE)
+                notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": new_status})
+
+                # 2. ለተጠቃሚው በቴሌግራም ቦት መልእክት መላክ
+                nums_formatted = ", ".join([f"#{n}" for n in numbers])
+                for uid in user_ids:
+                    if new_status == "sold":
+                        user_msg = f"🎉 **እንኳን ደስ አለዎት!**\n\nየመረጧቸው የቲኬት ቁጥሮች (**{nums_formatted}**) ክፍያቸው ፀድቋል። መልካም ዕድል!"
+                    else:
+                        user_msg = f"❌ **ትዕዛዝዎ አልፀደቀም**\n\nየመረጧቸው የቲኬት ቁጥሮች (**{nums_formatted}**) ክፍያ ስላልተረጋገጠ ተሰርዘዋል። እንደገና መሞከር ይችላሉ።"
+                    send_user_notification(uid, user_msg)
+
+                # 3. የአድሚኑን የቴሌግራም ቁልፎች እና ጽሑፍ ማዘመን
+                status_label = "✅ ጸድቋል (Sold)" if new_status == "sold" else "❌ ተሰርዟል (Available)"
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={
+                    "callback_query_id": cq["id"],
+                    "text": f"ቁጥሮች {numbers} {status_label} ሆነዋል!"
+                })
+
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageCaption", json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "caption": f"{msg.get('caption', '')}\n\n**ሁኔታ፦** {status_label}",
+                    "parse_mode": "Markdown"
+                })
+            except Exception as e:
+                logger.error(f"Callback Query Handling Error: {e}")
+            finally:
+                if conn: release_db_connection(conn)
+
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
