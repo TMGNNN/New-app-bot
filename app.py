@@ -15,6 +15,7 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+import jwt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -36,7 +37,7 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "*")
 
 app = Flask(__name__)
-# የፎቶ መጠን እስከ 16MB እንዲቀበል መፍቀድ (ከ 413 Payload Too Large ስህተት ለመጠበቅ)
+# የፎቶ/ፋይል መጠን እስከ 16MB እንዲቀበል መፍቀድ (413 Payload Too Large ለመከላከል)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org", "*"]}})
@@ -97,8 +98,7 @@ def verify_telegram_data(init_data: str) -> bool:
         logger.error(f"Telegram initData verification error: {e}")
         return False
 
-
-       def init_db():
+def init_db():
     if not DATABASE_URL:
         return
     conn = None
@@ -148,12 +148,12 @@ def verify_telegram_data(init_data: str) -> bool:
             
         conn.commit()
         cursor.close()
-        logger.info("✅ Database Migration & Initialization Successfully Completed!")
+        logger.info("✅ Database Initialization & Migration Successfully Completed!")
     except Exception as e:
         logger.error(f"❌ DB Init error: {e}")
     finally:
         if conn:
-            release_db_connection(conn) 
+            release_db_connection(conn)
 
 def cleanup_expired_pendings():
     conn = None
@@ -183,6 +183,7 @@ def cleanup_expired_pendings():
         if conn:
             release_db_connection(conn)
 
+# Application startup ሲደረግ የDB initialization እንዲሰራ ማድረግ
 init_db()
 
 def send_telegram_admin_notification(user_name, user_phone, selected_numbers, receipt_base64):
@@ -237,6 +238,7 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, re
 
     return file_id
 
+# 📩 ለተጠቃሚው አውቶማቲክ የቴሌግራም መልእክት መላኪያ ፈንክሽን
 def send_user_notification(user_id, text):
     if not BOT_TOKEN or not user_id or not str(user_id).isdigit():
         return
@@ -380,7 +382,7 @@ def submit_order():
         if conn: 
             release_db_connection(conn)
 
-# --- TELEGRAM BOT WEBHOOK FOR ADMIN APPROVALS ---
+# --- TELEGRAM BOT WEBHOOK FOR ADMIN APPROVALS & USER NOTIFICATION ---
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.json or {}
@@ -401,6 +403,7 @@ def telegram_webhook():
                 conn = get_db_connection()
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 
+                # በመጀመሪያ የነዚህን ቲኬቶች user_id ማግኘት
                 cursor.execute("SELECT DISTINCT user_id FROM tickets WHERE number = ANY(%s)", (numbers,))
                 user_rows = cursor.fetchall()
                 user_ids = [r['user_id'] for r in user_rows if r['user_id']]
@@ -421,8 +424,10 @@ def telegram_webhook():
                 conn.commit()
                 cursor.close()
 
+                # 1. ድረ-ገጹ ላይ ላሉ ተጠቃሚዎች ሁሉ የቁጥሩን ሁኔታ ማዘመን (SSE)
                 notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": new_status})
 
+                # 2. ለተጠቃሚው በቴሌግራም ቦት መልእክት መላክ
                 nums_formatted = ", ".join([f"#{n}" for n in numbers])
                 for uid in user_ids:
                     if new_status == "sold":
@@ -431,6 +436,7 @@ def telegram_webhook():
                         user_msg = f"❌ **ትዕዛዝዎ አልፀደቀም**\n\nየመረጧቸው የቲኬት ቁጥሮች (**{nums_formatted}**) ክፍያ ስላልተረጋገጠ ተሰርዘዋል። እንደገና መሞከር ይችላሉ።"
                     send_user_notification(uid, user_msg)
 
+                # 3. የአድሚኑን የቴሌግራም ቁልፎች እና ጽሑፍ ማዘመን
                 status_label = "✅ ጸድቋል (Sold)" if new_status == "sold" else "❌ ተሰርዟል (Available)"
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={
                     "callback_query_id": cq["id"],
@@ -446,7 +452,8 @@ def telegram_webhook():
             except Exception as e:
                 logger.error(f"Callback Query Handling Error: {e}")
             finally:
-                if conn: release_db_connection(conn)
+                if conn: 
+                    release_db_connection(conn)
 
     return jsonify({"status": "ok"}), 200
 
