@@ -97,7 +97,8 @@ def verify_telegram_data(init_data: str) -> bool:
         logger.error(f"Telegram initData verification error: {e}")
         return False
 
-def init_db():
+
+       def init_db():
     if not DATABASE_URL:
         return
     conn = None
@@ -105,6 +106,7 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
+        # 1. ቴብሉ ከሌለ መፍጠር
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 number INTEGER PRIMARY KEY,
@@ -118,6 +120,11 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+
+        # 2. ቀደም ሲል ለተፈጠረ ቴብል የጎደሉ ኮለሞችን በራስ አውቶማቲክ መጨመር (Migration)
+        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS receipt_file_id TEXT;")
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS logs (
@@ -138,14 +145,15 @@ def init_db():
         if count < 2200:
             tickets_data = [(i, 'available') for i in range(1, 2201)]
             cursor.executemany("INSERT INTO tickets (number, status) VALUES (%s, %s) ON CONFLICT (number) DO NOTHING", tickets_data)
-            conn.commit()
             
+        conn.commit()
         cursor.close()
+        logger.info("✅ Database Migration & Initialization Successfully Completed!")
     except Exception as e:
         logger.error(f"❌ DB Init error: {e}")
     finally:
         if conn:
-            release_db_connection(conn)
+            release_db_connection(conn) 
 
 def cleanup_expired_pendings():
     conn = None
