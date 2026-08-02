@@ -15,7 +15,6 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import jwt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -37,7 +36,10 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "*")
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org"]}})
+# የፎቶ መጠን እስከ 16MB እንዲቀበል መፍቀድ (ከ 413 Payload Too Large ስህተት ለመጠበቅ)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+
+CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org", "*"]}})
 
 limiter = Limiter(
     get_remote_address,
@@ -198,7 +200,7 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, re
 
     file_id = None
     try:
-        if receipt_base64 and "," in receipt_base64:
+        if receipt_base64 and isinstance(receipt_base64, str) and "," in receipt_base64:
             header, encoded = receipt_base64.split(",", 1)
             image_data = base64.b64decode(encoded)
             files = {'photo': ('receipt.jpg', io.BytesIO(image_data), 'image/jpeg')}
@@ -227,7 +229,6 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, re
 
     return file_id
 
-# 📩 ለተጠቃሚው አውቶማቲክ የቴሌግራም መልእክት መላኪያ ፈንክሽን
 def send_user_notification(user_id, text):
     if not BOT_TOKEN or not user_id or not str(user_id).isdigit():
         return
@@ -314,13 +315,13 @@ def get_my_tickets():
             release_db_connection(conn)
 
 @app.route('/api/submit-order', methods=['POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("10 per minute")
 def submit_order():
     data = request.json or {}
     init_data = data.get('initData')
     
     if init_data and not verify_telegram_data(init_data):
-        return jsonify({"success": False, "message": "Forbidden!"}), 403
+        return jsonify({"success": False, "message": "የቴሌግራም መረጃ ማረጋገጫ አልፈደም!"}), 403
 
     selected_numbers = data.get('numbers', [])
     user_id = str(data.get('user_id', ''))
@@ -329,8 +330,8 @@ def submit_order():
     referrer = data.get('referrer', 'የለም')
     receipt_base64 = data.get('receipt_base64')
 
-    if not selected_numbers:
-        return jsonify({"success": False, "message": "ምንም ቁጥር አልተመረጠም!"}), 400
+    if not selected_numbers or not user_name or not user_phone:
+        return jsonify({"success": False, "message": "እባክዎ ሁሉንም አስፈላጊ መረጃዎች ይሙሉ!"}), 400
 
     conn = None
     try:
@@ -363,13 +364,15 @@ def submit_order():
 
         return jsonify({"success": True, "message": "ትዕዛዝዎ በስኬት ተልኳል!"})
     except Exception as e:
-        if conn: conn.rollback()
+        if conn: 
+            conn.rollback()
         logger.error(f"Submit order error: {e}")
-        return jsonify({"success": False, "message": "የሰርቨር ስህተት"}), 500
+        return jsonify({"success": False, "message": f"የሰርቨር ስህተት፦ {str(e)}"}), 500
     finally:
-        if conn: release_db_connection(conn)
+        if conn: 
+            release_db_connection(conn)
 
-# --- TELEGRAM BOT WEBHOOK FOR ADMIN APPROVALS & USER NOTIFICATION ---
+# --- TELEGRAM BOT WEBHOOK FOR ADMIN APPROVALS ---
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.json or {}
@@ -390,7 +393,6 @@ def telegram_webhook():
                 conn = get_db_connection()
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 
-                # በመጀመሪያ የነዚህን ቲኬቶች user_id ማግኘት
                 cursor.execute("SELECT DISTINCT user_id FROM tickets WHERE number = ANY(%s)", (numbers,))
                 user_rows = cursor.fetchall()
                 user_ids = [r['user_id'] for r in user_rows if r['user_id']]
@@ -411,10 +413,8 @@ def telegram_webhook():
                 conn.commit()
                 cursor.close()
 
-                # 1. ድረ-ገጹ ላይ ላሉ ተጠቃሚዎች ሁሉ የቁጥሩን ሁኔታ ማዘመን (SSE)
                 notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": new_status})
 
-                # 2. ለተጠቃሚው በቴሌግራም ቦት መልእክት መላክ
                 nums_formatted = ", ".join([f"#{n}" for n in numbers])
                 for uid in user_ids:
                     if new_status == "sold":
@@ -423,7 +423,6 @@ def telegram_webhook():
                         user_msg = f"❌ **ትዕዛዝዎ አልፀደቀም**\n\nየመረጧቸው የቲኬት ቁጥሮች (**{nums_formatted}**) ክፍያ ስላልተረጋገጠ ተሰርዘዋል። እንደገና መሞከር ይችላሉ።"
                     send_user_notification(uid, user_msg)
 
-                # 3. የአድሚኑን የቴሌግራም ቁልፎች እና ጽሑፍ ማዘመን
                 status_label = "✅ ጸድቋል (Sold)" if new_status == "sold" else "❌ ተሰርዟል (Available)"
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={
                     "callback_query_id": cq["id"],
