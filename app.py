@@ -34,7 +34,6 @@ WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://your-mini-app-url.com")
 ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "*")
 
 app = Flask(__name__)
-# ፎቶዎችን እስከ 16MB መፍቀድ
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org", "*"]}})
@@ -103,7 +102,6 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. የተጠቃሚዎች ቴብል (ስልክ ቁጥርና መረጃ የሚቀመጥበት)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -114,7 +112,6 @@ def init_db():
             );
         ''')
 
-        # 2. የቲኬቶች ቴብል
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 number INTEGER PRIMARY KEY,
@@ -130,7 +127,6 @@ def init_db():
             );
         ''')
 
-        # 3. የReferrals ቴብል
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS referrals (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -152,7 +148,7 @@ def init_db():
             
         conn.commit()
         cursor.close()
-        logger.info("✅ Database Initialization & Migration Successfully Completed!")
+        logger.info("✅ Database Initialization Successfully Completed!")
     except Exception as e:
         logger.error(f"❌ DB Init error: {e}")
     finally:
@@ -190,7 +186,6 @@ def cleanup_expired_pendings():
 init_db()
 
 def calculate_total_price(ticket_count):
-    """የቅናሽ ዋጋ ስሌት (Server-side Validation)"""
     base_price = 3000
     total = ticket_count * base_price
     if ticket_count >= 5:
@@ -426,19 +421,17 @@ def submit_order():
         if conn: 
             release_db_connection(conn)
 
-# --- TELEGRAM BOT WEBHOOK (START, PHONE SHARE & APPROVALS) ---
+# --- TELEGRAM BOT WEBHOOK ---
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.json or {}
 
-    # 1. Message Handling (/start & Phone Contact Sharing)
     if "message" in update:
         msg = update["message"]
         chat_id = str(msg.get("chat", {}).get("id"))
         first_name = msg.get("from", {}).get("first_name", "")
         username = msg.get("from", {}).get("username", "")
 
-        # A. Contact Share ሲደረግ
         if "contact" in msg:
             phone_number = msg["contact"].get("phone_number")
             
@@ -460,7 +453,6 @@ def telegram_webhook():
                 if conn:
                     release_db_connection(conn)
 
-            # Mini App መክፈቻ Inline Button
             web_app_markup = {
                 "inline_keyboard": [
                     [{"text": "🚗 ቲኬት ቁረጡ (Open Mini App)", "web_app": {"url": WEB_APP_URL}}]
@@ -472,12 +464,10 @@ def telegram_webhook():
                 reply_markup=web_app_markup
             )
 
-        # B. /start command ሲላክ
         elif "text" in msg and msg["text"].startswith("/start"):
             text = msg["text"]
             args = text.split()
             
-            # Referral መመዝገብ
             if len(args) > 1 and args[1].startswith("ref_"):
                 inviter_id = args[1].replace("ref_", "")
                 if inviter_id != chat_id:
@@ -498,7 +488,6 @@ def telegram_webhook():
                         if conn:
                             release_db_connection(conn)
 
-            # Share Phone Button ማሳየት
             contact_markup = {
                 "keyboard": [
                     [{"text": "📱 ስልክ ቁጥርዎን ያጋሩ (Share Phone Number)", "request_contact": True}]
@@ -512,7 +501,6 @@ def telegram_webhook():
                 reply_markup=contact_markup
             )
 
-    # 2. Callback Query Handling (Admin Approve/Reject)
     if "callback_query" in update:
         cq = update["callback_query"]
         cb_data = cq.get("data", "")
@@ -541,7 +529,6 @@ def telegram_webhook():
                         WHERE number = ANY(%s)
                     """, (numbers,))
 
-                    # Referral Bonus ቼክ ማድረግ
                     for uid in user_ids:
                         cursor.execute("SELECT referred_by FROM referrals WHERE user_id = %s", (uid,))
                         ref_row = cursor.fetchone()
