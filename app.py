@@ -15,7 +15,6 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-import jwt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
@@ -31,13 +30,11 @@ logger.addHandler(log_handler)
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-WEBHOOK_SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET_TOKEN")
-JWT_SECRET = os.environ.get("JWT_SECRET", "super-secret-jwt-key")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://your-mini-app-url.com")
 ALLOWED_ORIGIN = os.environ.get("WEB_APP_URL", "*")
 
 app = Flask(__name__)
-# የፎቶ/ፋይል መጠን እስከ 16MB እንዲቀበል መፍቀድ (413 Payload Too Large ለመከላከል)
+# ፎቶዎችን እስከ 16MB መፍቀድ
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 CORS(app, resources={r"/api/*": {"origins": [ALLOWED_ORIGIN, "https://telegram.org", "*"]}})
@@ -106,7 +103,18 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. የቲኬቶች ቴብል
+        # 1. የተጠቃሚዎች ቴብል (ስልክ ቁጥርና መረጃ የሚቀመጥበት)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id VARCHAR(50) PRIMARY KEY,
+                first_name VARCHAR(100),
+                username VARCHAR(100),
+                phone_number VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
+        # 2. የቲኬቶች ቴብል
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 number INTEGER PRIMARY KEY,
@@ -122,29 +130,13 @@ def init_db():
             );
         ''')
 
-        # 2. የReferrals ቴብል (ለጓደኛ መጋበዣ ሲስተም)
+        # 3. የReferrals ቴብል
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS referrals (
                 user_id VARCHAR(50) PRIMARY KEY,
                 referred_by VARCHAR(50),
                 successful_invites INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-
-        # Migration columns
-        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
-        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
-        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS receipt_file_id TEXT;")
-        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS price_paid NUMERIC(10, 2);")
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS logs (
-                id SERIAL PRIMARY KEY,
-                number INTEGER,
-                action VARCHAR(20),
-                user_id VARCHAR(50),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
 
@@ -198,7 +190,7 @@ def cleanup_expired_pendings():
 init_db()
 
 def calculate_total_price(ticket_count):
-    """የቅናሽ ዋጋ ስሌት (Server-side Security Validation)"""
+    """የቅናሽ ዋጋ ስሌት (Server-side Validation)"""
     base_price = 3000
     total = ticket_count * base_price
     if ticket_count >= 5:
@@ -261,15 +253,18 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, to
 
     return file_id
 
-def send_user_notification(user_id, text):
-    if not BOT_TOKEN or not user_id or not str(user_id).isdigit():
+def send_user_notification(user_id, text, reply_markup=None):
+    if not BOT_TOKEN or not user_id:
         return
+    payload = {
+        "chat_id": user_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-            "chat_id": user_id,
-            "text": text,
-            "parse_mode": "Markdown"
-        })
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
     except Exception as e:
         logger.error(f"Failed to notify user {user_id}: {e}")
 
@@ -320,6 +315,30 @@ def get_tickets():
         if conn:
             release_db_connection(conn)
 
+@app.route('/api/get-user-info', methods=['GET'])
+def get_user_info():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"success": False, "message": "User ID ያስፈልጋል"}), 400
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT phone_number, first_name FROM users WHERE user_id = %s", (str(user_id),))
+        user = cursor.fetchone()
+        cursor.close()
+        
+        if user:
+            return jsonify({"success": True, "phone": user['phone_number'], "name": user['first_name']})
+        return jsonify({"success": False, "message": "ተጠቃሚ አልተገኘም"}), 404
+    except Exception as e:
+        logger.error(f"Fetch user info error: {e}")
+        return jsonify({"success": False, "message": "የሰርቨር ስህተት"}), 500
+    finally:
+        if conn:
+            release_db_connection(conn)
+
 @app.route('/api/my-tickets', methods=['GET'])
 def get_my_tickets():
     user_id = request.args.get('user_id')
@@ -365,7 +384,6 @@ def submit_order():
     if not selected_numbers or not user_name or not user_phone:
         return jsonify({"success": False, "message": "እባክዎ ሁሉንም አስፈላጊ መረጃዎች ይሙሉ!"}), 400
 
-    # ዋጋ በሰርቨር ደረጃ ማረጋገጥ
     total_price = calculate_total_price(len(selected_numbers))
     price_per_ticket = total_price / len(selected_numbers)
 
@@ -408,19 +426,58 @@ def submit_order():
         if conn: 
             release_db_connection(conn)
 
-# --- TELEGRAM BOT WEBHOOK (HANDLES REFERRALS & APPROVALS) ---
+# --- TELEGRAM BOT WEBHOOK (START, PHONE SHARE & APPROVALS) ---
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.json or {}
 
-    # 1. /start ref_USERID ትዕዛዝ እና Referral መመዝገብ
-    if "message" in update and "text" in update["message"]:
+    # 1. Message Handling (/start & Phone Contact Sharing)
+    if "message" in update:
         msg = update["message"]
-        text = msg.get("text", "")
         chat_id = str(msg.get("chat", {}).get("id"))
+        first_name = msg.get("from", {}).get("first_name", "")
+        username = msg.get("from", {}).get("username", "")
 
-        if text.startswith("/start"):
+        # A. Contact Share ሲደረግ
+        if "contact" in msg:
+            phone_number = msg["contact"].get("phone_number")
+            
+            conn = None
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO users (user_id, first_name, username, phone_number)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE 
+                    SET phone_number = EXCLUDED.phone_number, first_name = EXCLUDED.first_name;
+                """, (chat_id, first_name, username, phone_number))
+                conn.commit()
+                cursor.close()
+            except Exception as e:
+                logger.error(f"User contact save error: {e}")
+            finally:
+                if conn:
+                    release_db_connection(conn)
+
+            # Mini App መክፈቻ Inline Button
+            web_app_markup = {
+                "inline_keyboard": [
+                    [{"text": "🚗 ቲኬት ቁረጡ (Open Mini App)", "web_app": {"url": WEB_APP_URL}}]
+                ]
+            }
+            send_user_notification(
+                chat_id, 
+                f"✅ **ስልክ ቁጥርዎ ({phone_number}) በስኬት ተመዝግቧል!**\n\nአሁን ታች ያለውን አዝራር በመጫን የዕድል ቁጥርዎን መምረጥ ይችላሉ👇", 
+                reply_markup=web_app_markup
+            )
+
+        # B. /start command ሲላክ
+        elif "text" in msg and msg["text"].startswith("/start"):
+            text = msg["text"]
             args = text.split()
+            
+            # Referral መመዝገብ
             if len(args) > 1 and args[1].startswith("ref_"):
                 inviter_id = args[1].replace("ref_", "")
                 if inviter_id != chat_id:
@@ -441,9 +498,21 @@ def telegram_webhook():
                         if conn:
                             release_db_connection(conn)
 
-            send_user_notification(chat_id, "እንኳን ወደ መኪና ሎተሪ ቦት በደህና መጡ! 🚗\nታች ያለውን አዝራር ነክተው ቲኬት መቁረጥ ይችላሉ።")
+            # Share Phone Button ማሳየት
+            contact_markup = {
+                "keyboard": [
+                    [{"text": "📱 ስልክ ቁጥርዎን ያጋሩ (Share Phone Number)", "request_contact": True}]
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            }
+            send_user_notification(
+                chat_id,
+                f"እንኳን ወደ **Jetour Dashing 2026** የመኪና ሎተሪ በደህና መጡ! 🚗✨\n\nለመቀጠል እባክዎ ከታች ያለውን **'📱 ስልክ ቁጥርዎን ያጋሩ'** የሚለውን አዝራር ይጫኑ።",
+                reply_markup=contact_markup
+            )
 
-    # 2. የአድሚን Approval/Reject የክትትል አሰራር
+    # 2. Callback Query Handling (Admin Approve/Reject)
     if "callback_query" in update:
         cq = update["callback_query"]
         cb_data = cq.get("data", "")
@@ -472,7 +541,7 @@ def telegram_webhook():
                         WHERE number = ANY(%s)
                     """, (numbers,))
 
-                    # የReferral ውጤትን መፈተሽ (የጋበዘውን ሰው ነፃ ቲኬት መስጠት)
+                    # Referral Bonus ቼክ ማድረግ
                     for uid in user_ids:
                         cursor.execute("SELECT referred_by FROM referrals WHERE user_id = %s", (uid,))
                         ref_row = cursor.fetchone()
