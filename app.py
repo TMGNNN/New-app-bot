@@ -106,7 +106,7 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. ቴብሉ ከሌለ መፍጠር
+        # 1. የቲኬቶች ቴብል
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 number INTEGER PRIMARY KEY,
@@ -116,15 +116,27 @@ def init_db():
                 user_phone VARCHAR(50),
                 referrer VARCHAR(100),
                 receipt_file_id TEXT,
+                price_paid NUMERIC(10, 2),
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
 
-        # 2. ቀደም ሲል ለተፈጠረ ቴብል የጎደሉ ኮለሞችን በራስ አውቶማቲክ መጨመር (Migration)
+        # 2. የReferrals ቴብል (ለጓደኛ መጋበዣ ሲስተም)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS referrals (
+                user_id VARCHAR(50) PRIMARY KEY,
+                referred_by VARCHAR(50),
+                successful_invites INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
+        # Migration columns
         cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
         cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
         cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS receipt_file_id TEXT;")
+        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS price_paid NUMERIC(10, 2);")
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS logs (
@@ -164,7 +176,7 @@ def cleanup_expired_pendings():
         
         cursor.execute("""
             UPDATE tickets 
-            SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL, receipt_file_id = NULL
+            SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL, receipt_file_id = NULL, price_paid = NULL
             WHERE status = 'pending' AND updated_at < %s
             RETURNING number;
         """, (fifteen_mins_ago,))
@@ -183,19 +195,30 @@ def cleanup_expired_pendings():
         if conn:
             release_db_connection(conn)
 
-# Application startup ሲደረግ የDB initialization እንዲሰራ ማድረግ
 init_db()
 
-def send_telegram_admin_notification(user_name, user_phone, selected_numbers, receipt_base64):
+def calculate_total_price(ticket_count):
+    """የቅናሽ ዋጋ ስሌት (Server-side Security Validation)"""
+    base_price = 3000
+    total = ticket_count * base_price
+    if ticket_count >= 5:
+        total -= 1500
+    elif ticket_count >= 3:
+        total -= 500
+    return max(total, 0)
+
+def send_telegram_admin_notification(user_name, user_phone, selected_numbers, total_price, referrer, receipt_base64):
     if not (ADMIN_CHAT_ID and BOT_TOKEN):
         return None
 
     nums_str = ",".join(map(str, selected_numbers))
     caption = (
-        f"🆕 **አዲስ ትዕዛዝ ተልኳል!**\n\n"
+        f"🆕 **አዲስ የቲኬት ትዕዛዝ!**\n\n"
         f"👤 **ስም:** {user_name}\n"
         f"📞 **ስልክ:** {user_phone}\n"
-        f"🎟️ **ቁጥሮች:** {nums_str}"
+        f"🎟️ **ቁጥሮች:** {nums_str}\n"
+        f"💰 **ጠቅላላ ዋጋ:** {total_price:,} ብር\n"
+        f"🔗 **የጋበዘው:** {referrer}"
     )
 
     reply_markup = {
@@ -238,7 +261,6 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, re
 
     return file_id
 
-# 📩 ለተጠቃሚው አውቶማቲክ የቴሌግራም መልእክት መላኪያ ፈንክሽን
 def send_user_notification(user_id, text):
     if not BOT_TOKEN or not user_id or not str(user_id).isdigit():
         return
@@ -309,7 +331,7 @@ def get_my_tickets():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
-            SELECT number, status, updated_at 
+            SELECT number, status, price_paid, updated_at 
             FROM tickets 
             WHERE user_id = %s AND status IN ('pending', 'sold')
             ORDER BY updated_at DESC
@@ -343,6 +365,10 @@ def submit_order():
     if not selected_numbers or not user_name or not user_phone:
         return jsonify({"success": False, "message": "እባክዎ ሁሉንም አስፈላጊ መረጃዎች ይሙሉ!"}), 400
 
+    # ዋጋ በሰርቨር ደረጃ ማረጋገጥ
+    total_price = calculate_total_price(len(selected_numbers))
+    price_per_ticket = total_price / len(selected_numbers)
+
     conn = None
     try:
         conn = get_db_connection()
@@ -359,13 +385,13 @@ def submit_order():
             cursor.close()
             return jsonify({"success": False, "message": f"ቁጥሮቹ ቀደም ብለው ተይዘዋል፡ {taken_nums}"}), 400
 
-        file_id = send_telegram_admin_notification(user_name, user_phone, selected_numbers, receipt_base64)
+        file_id = send_telegram_admin_notification(user_name, user_phone, selected_numbers, total_price, referrer, receipt_base64)
 
         cursor.execute('''
             UPDATE tickets 
-            SET status = 'pending', user_id = %s, user_name = %s, user_phone = %s, referrer = %s, receipt_file_id = %s, updated_at = CURRENT_TIMESTAMP
+            SET status = 'pending', user_id = %s, user_name = %s, user_phone = %s, referrer = %s, receipt_file_id = %s, price_paid = %s, updated_at = CURRENT_TIMESTAMP
             WHERE number = ANY(%s)
-        ''', (user_id, user_name, user_phone, referrer, file_id, selected_numbers))
+        ''', (user_id, user_name, user_phone, referrer, file_id, price_per_ticket, selected_numbers))
 
         conn.commit()
         cursor.close()
@@ -382,10 +408,42 @@ def submit_order():
         if conn: 
             release_db_connection(conn)
 
-# --- TELEGRAM BOT WEBHOOK FOR ADMIN APPROVALS & USER NOTIFICATION ---
+# --- TELEGRAM BOT WEBHOOK (HANDLES REFERRALS & APPROVALS) ---
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
     update = request.json or {}
+
+    # 1. /start ref_USERID ትዕዛዝ እና Referral መመዝገብ
+    if "message" in update and "text" in update["message"]:
+        msg = update["message"]
+        text = msg.get("text", "")
+        chat_id = str(msg.get("chat", {}).get("id"))
+
+        if text.startswith("/start"):
+            args = text.split()
+            if len(args) > 1 and args[1].startswith("ref_"):
+                inviter_id = args[1].replace("ref_", "")
+                if inviter_id != chat_id:
+                    conn = None
+                    try:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO referrals (user_id, referred_by)
+                            VALUES (%s, %s)
+                            ON CONFLICT (user_id) DO NOTHING;
+                        """, (chat_id, inviter_id))
+                        conn.commit()
+                        cursor.close()
+                    except Exception as e:
+                        logger.error(f"Referral registration error: {e}")
+                    finally:
+                        if conn:
+                            release_db_connection(conn)
+
+            send_user_notification(chat_id, "እንኳን ወደ መኪና ሎተሪ ቦት በደህና መጡ! 🚗\nታች ያለውን አዝራር ነክተው ቲኬት መቁረጥ ይችላሉ።")
+
+    # 2. የአድሚን Approval/Reject የክትትል አሰራር
     if "callback_query" in update:
         cq = update["callback_query"]
         cb_data = cq.get("data", "")
@@ -403,7 +461,6 @@ def telegram_webhook():
                 conn = get_db_connection()
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 
-                # በመጀመሪያ የነዚህን ቲኬቶች user_id ማግኘት
                 cursor.execute("SELECT DISTINCT user_id FROM tickets WHERE number = ANY(%s)", (numbers,))
                 user_rows = cursor.fetchall()
                 user_ids = [r['user_id'] for r in user_rows if r['user_id']]
@@ -414,20 +471,37 @@ def telegram_webhook():
                         SET status = 'sold', updated_at = CURRENT_TIMESTAMP
                         WHERE number = ANY(%s)
                     """, (numbers,))
+
+                    # የReferral ውጤትን መፈተሽ (የጋበዘውን ሰው ነፃ ቲኬት መስጠት)
+                    for uid in user_ids:
+                        cursor.execute("SELECT referred_by FROM referrals WHERE user_id = %s", (uid,))
+                        ref_row = cursor.fetchone()
+                        if ref_row and ref_row['referred_by']:
+                            inviter = ref_row['referred_by']
+                            cursor.execute("""
+                                UPDATE referrals 
+                                SET successful_invites = successful_invites + 1 
+                                WHERE user_id = %s 
+                                RETURNING successful_invites;
+                            """, (inviter,))
+                            inv_res = cursor.fetchone()
+                            if inv_res and inv_res['successful_invites'] % 5 == 0:
+                                send_user_notification(
+                                    inviter, 
+                                    "🎉 **እንኳን ደስ አለዎት!**\n\n5 ጓደኞችን በመጋበዝዎ 1 **ነፃ የሎተሪ ቲኬት (Bonus Ticket)** አግኝተዋል! አድሚኑ ያነጋግርዎታል።"
+                                )
                 else:
                     cursor.execute("""
                         UPDATE tickets 
-                        SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL, receipt_file_id = NULL, updated_at = CURRENT_TIMESTAMP
+                        SET status = 'available', user_id = NULL, user_name = NULL, user_phone = NULL, referrer = NULL, receipt_file_id = NULL, price_paid = NULL, updated_at = CURRENT_TIMESTAMP
                         WHERE number = ANY(%s)
                     """, (numbers,))
 
                 conn.commit()
                 cursor.close()
 
-                # 1. ድረ-ገጹ ላይ ላሉ ተጠቃሚዎች ሁሉ የቁጥሩን ሁኔታ ማዘመን (SSE)
                 notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": new_status})
 
-                # 2. ለተጠቃሚው በቴሌግራም ቦት መልእክት መላክ
                 nums_formatted = ", ".join([f"#{n}" for n in numbers])
                 for uid in user_ids:
                     if new_status == "sold":
@@ -436,7 +510,6 @@ def telegram_webhook():
                         user_msg = f"❌ **ትዕዛዝዎ አልፀደቀም**\n\nየመረጧቸው የቲኬት ቁጥሮች (**{nums_formatted}**) ክፍያ ስላልተረጋገጠ ተሰርዘዋል። እንደገና መሞከር ይችላሉ።"
                     send_user_notification(uid, user_msg)
 
-                # 3. የአድሚኑን የቴሌግራም ቁልፎች እና ጽሑፍ ማዘመን
                 status_label = "✅ ጸድቋል (Sold)" if new_status == "sold" else "❌ ተሰርዟል (Available)"
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={
                     "callback_query_id": cq["id"],
