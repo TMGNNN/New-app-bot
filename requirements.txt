@@ -9,3 +9,5 @@ qrcode
 PyJWT
 telethon
 APScheduler
+SQLAlchemy
+Flask-SQLAlchemy
