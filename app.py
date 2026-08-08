@@ -207,8 +207,7 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
         cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMP;")
-
-cursor.execute("SELECT COUNT(*) FROM tickets;")
+        cursor.execute("SELECT COUNT(*) FROM tickets;")
         cursor.execute("SELECT COUNT(*) FROM tickets;")
         count = cursor.fetchone()['count']
         
