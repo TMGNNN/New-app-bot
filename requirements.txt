@@ -8,3 +8,4 @@ reportlab
 qrcode
 PyJWT
 telethon
+APScheduler
