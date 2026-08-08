@@ -777,7 +777,16 @@ def get_audit_logs():
         return jsonify([]), 500
     finally:
         if conn: release_db_connection(conn)
-
+            
+with app.app_context():
+    from sqlalchemy import text
+    try:
+        db.session.execute(text("ALTER TABLE tickets ADD COLUMN reserved_at TIMESTAMP WITH TIME ZONE;"))
+        db.session.commit()
+        print("Column reserved_at added successfully!")
+    except Exception as e:
+        db.session.rollback()
+        print("Column might already exist or error occurred:", e)
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
