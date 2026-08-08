@@ -206,8 +206,10 @@ def init_db():
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
-        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMP;")
-        cursor.execute("SELECT COUNT(*) FROM tickets;")
+        
+        # 🟢 ነባር Database ካለ የጎደለውን reserved_at Column በራስ-ሰር ይጨምራል
+        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMP WITH TIME ZONE;")
+
         cursor.execute("SELECT COUNT(*) FROM tickets;")
         count = cursor.fetchone()['count']
         
@@ -227,6 +229,7 @@ def init_db():
         logger.info("✅ Database Initialized!")
     except Exception as e:
         logger.error(f"❌ DB Init error: {e}")
+        if conn: conn.rollback()
     finally:
         if conn:
             release_db_connection(conn)
@@ -258,6 +261,7 @@ def cleanup_expired_pendings():
         cursor.close()
     except Exception as e:
         logger.error(f"Error cleaning expired tickets: {e}")
+        if conn: conn.rollback()
     finally:
         if conn:
             release_db_connection(conn)
