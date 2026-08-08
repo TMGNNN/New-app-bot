@@ -206,7 +206,9 @@ def init_db():
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
-
+        # init_db() ውስጥ cursor.close() ከማድረግህ በፊት መጨመር ትችላለህ
+        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMP;")
+   
         cursor.execute("SELECT COUNT(*) FROM tickets;")
         count = cursor.fetchone()['count']
         
@@ -778,15 +780,6 @@ def get_audit_logs():
     finally:
         if conn: release_db_connection(conn)
             
-with app.app_context():
-    from sqlalchemy import text
-    try:
-        db.session.execute(text("ALTER TABLE tickets ADD COLUMN reserved_at TIMESTAMP WITH TIME ZONE;"))
-        db.session.commit()
-        print("Column reserved_at added successfully!")
-    except Exception as e:
-        db.session.rollback()
-        print("Column might already exist or error occurred:", e)
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
