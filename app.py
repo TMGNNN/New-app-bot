@@ -8,6 +8,7 @@ import time
 import io
 import atexit
 import random
+from functools import wraps
 
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
@@ -106,19 +107,38 @@ def verify_telegram_data(init_data: str) -> bool:
         logger.error(f"Telegram initData verification error: {e}")
         return False
 
+def extract_telegram_user(init_data: str):
+    try:
+        parsed = dict(parse_qsl(init_data))
+        user_info = json.loads(parsed.get('user', '{}'))
+        return user_info
+    except Exception:
+        return None
+
+def telegram_auth_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        init_data = request.headers.get('X-Telegram-Init-Data') or request.args.get('initData') or (request.json or {}).get('initData')
+        if not init_data or not verify_telegram_data(init_data):
+            return jsonify({"success": False, "message": "Unauthorized: የቴሌግራም ማረጋገጫ አልተገኘም!"}), 401
+        
+        user_info = extract_telegram_user(init_data)
+        if not user_info or 'id' not in user_info:
+            return jsonify({"success": False, "message": "Invalid User Data"}), 401
+            
+        request.telegram_user = user_info
+        request.telegram_user_id = str(user_info['id'])
+        return f(*args, **kwargs)
+    return decorated_function
+
 def is_authorized_admin(req):
-    user_id = req.headers.get('X-User-Id') or (req.json or {}).get('user_id') or req.args.get('user_id')
-    if user_id and str(user_id) in ADMIN_IDS:
-        return True
+    init_data = req.headers.get('X-Telegram-Init-Data') or req.args.get('initData') or (req.json or {}).get('initData')
+    if not init_data or not verify_telegram_data(init_data):
+        return False
     
-    init_data = req.headers.get('X-Telegram-Init-Data')
-    if init_data and verify_telegram_data(init_data):
-        try:
-            parsed = dict(parse_qsl(init_data))
-            user_info = json.loads(parsed.get('user', '{}'))
-            return str(user_info.get('id')) in ADMIN_IDS
-        except Exception:
-            pass
+    user_info = extract_telegram_user(init_data)
+    if user_info and 'id' in user_info:
+        return str(user_info['id']) in ADMIN_IDS
     return False
 
 def send_telegram_push(chat_id, text):
@@ -184,17 +204,6 @@ def init_db():
         ''')
 
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS winners (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(100),
-                ticket_number INTEGER,
-                round VARCHAR(50),
-                photo TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
-
-        cursor.execute('''
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id SERIAL PRIMARY KEY,
                 admin_id VARCHAR(50),
@@ -206,9 +215,6 @@ def init_db():
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
-        
-        # 🟢 ነባር Database ካለ የጎደለውን reserved_at Column በራስ-ሰር ይጨምራል
-        cursor.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMP WITH TIME ZONE;")
 
         cursor.execute("SELECT COUNT(*) FROM tickets;")
         count = cursor.fetchone()['count']
@@ -229,7 +235,6 @@ def init_db():
         logger.info("✅ Database Initialized!")
     except Exception as e:
         logger.error(f"❌ DB Init error: {e}")
-        if conn: conn.rollback()
     finally:
         if conn:
             release_db_connection(conn)
@@ -261,7 +266,6 @@ def cleanup_expired_pendings():
         cursor.close()
     except Exception as e:
         logger.error(f"Error cleaning expired tickets: {e}")
-        if conn: conn.rollback()
     finally:
         if conn:
             release_db_connection(conn)
@@ -275,11 +279,13 @@ init_db()
 def calculate_total_price(ticket_count):
     base_price = 3000
     total = ticket_count * base_price
+    savings = 0
     if ticket_count >= 5:
-        total -= 1500
+        savings = 1500
     elif ticket_count >= 3:
-        total -= 500
-    return max(total, 0)
+        savings = 500
+    total -= savings
+    return max(total, 0), savings
 
 def send_telegram_admin_notification(user_name, user_phone, selected_numbers, total_price, referrer, receipt_base64, user_id, order_id):
     if not (ADMIN_CHAT_ID and BOT_TOKEN):
@@ -329,7 +335,7 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, to
 
     return file_id
 
-# API ENDPOINTS
+# PUBLIC & AUTHENTICATED API ENDPOINTS
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -340,34 +346,52 @@ def bot_webhook_handler():
     return jsonify({"status": "ok"}), 200
 
 @app.route('/api/reserve-tickets', methods=['POST'])
+@telegram_auth_required
 def reserve_tickets():
     data = request.json or {}
     numbers = data.get('numbers', [])
-    user_id = str(data.get('user_id', ''))
+    user_id = request.telegram_user_id
     
-    if not numbers or not user_id:
-        return jsonify({"success": False, "message": "አስፈላጊ መረጃ ጎድሏል!"}), 400
+    if not numbers or not isinstance(numbers, list):
+        return jsonify({"success": False, "message": "እባክዎ ትክክለኛ ቲኬት ይምረጡ!"}), 400
         
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        cursor.execute("SELECT number FROM tickets WHERE number = ANY(%s) AND status != 'available'", (numbers,))
-        taken = cursor.fetchall()
-        if taken:
-            return jsonify({"success": False, "message": "አንዳንድ የተመረጡ ቁጥሮች በሌላ ሰው ተይዘዋል!"}), 400
+        # ROW-LEVEL LOCKING (Prevent Race Conditions)
+        cursor.execute("SELECT number, status, user_id FROM tickets WHERE number = ANY(%s) FOR UPDATE;", (numbers,))
+        tickets = cursor.fetchall()
+
+        if len(tickets) != len(numbers):
+            conn.rollback()
+            return jsonify({"success": False, "message": "አንዳንድ የተመረጡ ቁጥሮች አይገኙም!"}), 400
+
+        for t in tickets:
+            if t['status'] != 'available' and not (t['status'] == 'reserved' and t['user_id'] == user_id):
+                conn.rollback()
+                return jsonify({"success": False, "message": f"ቁጥር #{t['number']} ቀደም ሲል በሌላ ሰው ተይዟል!"}), 400
             
+        now = datetime.utcnow()
         cursor.execute("""
             UPDATE tickets 
-            SET status = 'reserved', user_id = %s, reserved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            SET status = 'reserved', user_id = %s, reserved_at = %s, updated_at = %s
             WHERE number = ANY(%s)
-        """, (user_id, numbers))
+        """, (user_id, now, now, numbers))
+        
         conn.commit()
         cursor.close()
         
+        total_price, savings = calculate_total_price(len(numbers))
+
         notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": "reserved"})
-        return jsonify({"success": True, "reserved_at": datetime.utcnow().isoformat()})
+        return jsonify({
+            "success": True, 
+            "reserved_at": now.isoformat(),
+            "total_price": total_price,
+            "savings": savings
+        })
     except Exception as e:
         if conn: conn.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
@@ -375,10 +399,9 @@ def reserve_tickets():
         if conn: release_db_connection(conn)
 
 @app.route('/api/referral-stats', methods=['GET'])
+@telegram_auth_required
 def get_referral_stats():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"success": False}), 400
+    user_id = request.telegram_user_id
     conn = None
     try:
         conn = get_db_connection()
@@ -388,7 +411,7 @@ def get_referral_stats():
                    COUNT(CASE WHEN status = 'sold' THEN 1 END) as successful_purchases
             FROM tickets 
             WHERE referrer = %s;
-        """, (str(user_id),))
+        """, (user_id,))
         stats = cursor.fetchone()
         cursor.close()
         return jsonify({"success": True, "stats": stats})
@@ -418,15 +441,14 @@ def get_recent_purchases():
         if conn: release_db_connection(conn)
 
 @app.route('/api/get-user-info', methods=['GET'])
+@telegram_auth_required
 def get_user_info():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"success": False}), 400
+    user_id = request.telegram_user_id
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT first_name, phone_number, is_admin FROM users WHERE user_id = %s", (str(user_id),))
+        cursor.execute("SELECT first_name, phone_number, is_admin FROM users WHERE user_id = %s", (user_id,))
         user = cursor.fetchone()
         cursor.close()
         if user:
@@ -434,9 +456,9 @@ def get_user_info():
                 "success": True, 
                 "name": user['first_name'], 
                 "phone": user['phone_number'],
-                "is_admin": user.get('is_admin', False)
+                "is_admin": user.get('is_admin', False) or (user_id in ADMIN_IDS)
             })
-        return jsonify({"success": False}), 404
+        return jsonify({"success": True, "name": request.telegram_user.get('first_name', 'ተጠቃሚ'), "phone": "", "is_admin": user_id in ADMIN_IDS})
     except Exception as e:
         return jsonify({"success": False}), 500
     finally:
@@ -480,7 +502,7 @@ def get_tickets():
                 "updated_at": row['updated_at'].isoformat() if row['updated_at'] else None
             }
         res = jsonify(tickets_info)
-        res.headers['Cache-Control'] = 'public, max-age=10'
+        res.headers['Cache-Control'] = 'public, max-age=5'
         return res
     except Exception as e:
         return jsonify({}), 500
@@ -488,10 +510,9 @@ def get_tickets():
         if conn: release_db_connection(conn)
 
 @app.route('/api/my-tickets', methods=['GET'])
+@telegram_auth_required
 def get_my_tickets():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify([]), 400
+    user_id = request.telegram_user_id
     conn = None
     try:
         conn = get_db_connection()
@@ -501,7 +522,7 @@ def get_my_tickets():
             FROM tickets 
             WHERE user_id = %s AND status IN ('pending', 'sold', 'reserved')
             ORDER BY updated_at DESC
-        """, (str(user_id),))
+        """, (user_id,))
         rows = cursor.fetchall()
         cursor.close()
         return jsonify(rows)
@@ -510,52 +531,46 @@ def get_my_tickets():
     finally:
         if conn: release_db_connection(conn)
 
-@app.route('/api/winners', methods=['GET'])
-def get_winners():
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT name, ticket_number, round, photo FROM winners ORDER BY created_at DESC;")
-        winners = cursor.fetchall()
-        cursor.close()
-        return jsonify(winners)
-    except Exception as e:
-        return jsonify([]), 500
-    finally:
-        if conn: release_db_connection(conn)
-
 @app.route('/api/submit-order', methods=['POST'])
 @limiter.limit("10 per minute")
+@telegram_auth_required
 def submit_order():
     data = request.json or {}
     selected_numbers = data.get('numbers', [])
-    user_id = str(data.get('user_id', ''))
-    user_name = data.get('user_name')
+    user_id = request.telegram_user_id
+    user_name = data.get('user_name') or request.telegram_user.get('first_name', 'ተጠቃሚ')
     user_phone = data.get('user_phone')
     referrer = data.get('referrer', 'የለም')
     receipt_base64 = data.get('receipt_base64')
 
-    if not selected_numbers or not user_name or not user_phone:
+    if not selected_numbers or not user_phone:
         return jsonify({"success": False, "message": "እባክዎ ሁሉንም አስፈላጊ መረጃዎች ይሙሉ!"}), 400
 
     invalid_numbers = [n for n in selected_numbers if not isinstance(n, int) or n < 1 or n > 2200]
     if invalid_numbers:
         return jsonify({"success": False, "message": "የተሳሳተ የቲኬት ቁጥር ተመርጧል!"}), 400
 
-    order_id = f"ORD-{int(time.time())}-{random.randint(100,999)}"
-    total_price = calculate_total_price(len(selected_numbers))
-    price_per_ticket = total_price / len(selected_numbers)
-
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        cursor.execute("SELECT number FROM tickets WHERE number = ANY(%s) AND status NOT IN ('available', 'reserved')", (selected_numbers,))
-        taken = cursor.fetchall()
-        if taken:
-            return jsonify({"success": False, "message": "አንዳንድ የተመረጡ ቁጥሮች ቀደም ብለው ተይዘዋል!"}), 400
+        # ROW-LEVEL LOCK FOR PURCHASE
+        cursor.execute("SELECT number, status, user_id FROM tickets WHERE number = ANY(%s) FOR UPDATE;", (selected_numbers,))
+        locked_tickets = cursor.fetchall()
+
+        for t in locked_tickets:
+            if t['status'] not in ['available', 'reserved']:
+                conn.rollback()
+                return jsonify({"success": False, "message": f"ቁጥር #{t['number']} በሌላ ሰው ተይዟል!"}), 400
+            if t['status'] == 'reserved' and t['user_id'] != user_id:
+                conn.rollback()
+                return jsonify({"success": False, "message": f"ቁጥር #{t['number']} የሌላ ሰው ቦታ ማስያዣ ነው!"}), 400
+
+        # Centralized Backend Calculation
+        total_price, _ = calculate_total_price(len(selected_numbers))
+        price_per_ticket = total_price / len(selected_numbers)
+        order_id = f"ORD-{int(time.time())}-{random.randint(100,999)}"
 
         file_id = send_telegram_admin_notification(user_name, user_phone, selected_numbers, total_price, referrer, receipt_base64, user_id, order_id)
 
@@ -577,13 +592,13 @@ def submit_order():
     finally:
         if conn: release_db_connection(conn)
 
-# ADMIN ENDPOINTS
+# ADMIN STRICT ENDPOINTS
 
 @app.route('/api/admin/verify-auth', methods=['POST'])
 def verify_admin_auth():
     if is_authorized_admin(request):
         return jsonify({"success": True, "is_admin": True}), 200
-    return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"error": "Unauthorized Access"}), 401
 
 @app.route('/api/admin/analytics', methods=['POST'])
 def admin_analytics():
@@ -626,7 +641,6 @@ def broadcast_message():
     
     data = request.json or {}
     message_text = data.get('message')
-    admin_id = data.get('user_id', 'Admin')
 
     if not message_text:
         return jsonify({"error": "Message is required"}), 400
@@ -646,7 +660,7 @@ def broadcast_message():
             send_telegram_push(uid, f"📢 **የሎተሪ ማሳወቂያ፦**\n\n{message_text}")
             sent_count += 1
 
-        log_audit_action(admin_id, "BROADCAST_MESSAGE", f"Sent broadcast to {sent_count} ticket holders")
+        log_audit_action("ADMIN", "BROADCAST_MESSAGE", f"Sent broadcast to {sent_count} ticket holders")
         return jsonify({"success": True, "message": f"መልእክቱ ለ {sent_count} ቲኬት ባለቤቶች ተልኳል!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -686,7 +700,6 @@ def update_ticket_status():
         return jsonify({"error": "Unauthorized"}), 401
     
     data = request.json or {}
-    admin_id = data.get('user_id', 'Admin')
     ticket_numbers = data.get('ticket_numbers', [])
     new_status = data.get('status')
     
@@ -714,7 +727,7 @@ def update_ticket_status():
         conn.commit()
         cursor.close()
         
-        log_audit_action(admin_id, "UPDATE_TICKET_STATUS", f"Updated tickets {ticket_numbers} to {new_status}")
+        log_audit_action("ADMIN", "UPDATE_TICKET_STATUS", f"Updated tickets {ticket_numbers} to {new_status}")
         
         msg = f"🎉 የቲኬት ትዕዛዝዎ ፀድቋል! ቁጥሮች፦ {ticket_numbers}" if new_status == 'sold' else f"⚠️ የቲኬት ቁጥሮችዎ {ticket_numbers} ተሰርዘዋል/ተለቀዋል።"
         for uid in users_to_notify:
@@ -723,43 +736,6 @@ def update_ticket_status():
         notify_clients({"type": "UPDATE_NUMBERS", "numbers": ticket_numbers, "status": new_status})
         
         return jsonify({"success": True, "message": f"{len(ticket_numbers)} ቲኬቶች ተሻሻሉ!"})
-    except Exception as e:
-        if conn: conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if conn: release_db_connection(conn)
-
-@app.route('/api/admin/add-winner', methods=['POST'])
-def add_winner():
-    if not is_authorized_admin(request):
-        return jsonify({"error": "Unauthorized"}), 401
-    
-    data = request.json or {}
-    admin_id = data.get('user_id', 'Admin')
-    name = data.get('name')
-    ticket_number = data.get('ticket_number')
-    round_name = data.get('round', 'Round 1')
-    photo = data.get('photo', '')
-    
-    if not name or not isinstance(ticket_number, int) or ticket_number < 1 or ticket_number > 2200:
-        return jsonify({"error": "Name and valid ticket number required"}), 400
-    
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        cursor.execute("""
-            INSERT INTO winners (name, ticket_number, round, photo)
-            VALUES (%s, %s, %s, %s)
-        """, (name, ticket_number, round_name, photo))
-        
-        conn.commit()
-        cursor.close()
-        
-        log_audit_action(admin_id, "ADD_WINNER", f"Added winner {name} for ticket #{ticket_number}")
-        
-        return jsonify({"success": True, "message": "አሸናፊ ተጨምሯል!"})
     except Exception as e:
         if conn: conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -782,7 +758,7 @@ def get_audit_logs():
         return jsonify([]), 500
     finally:
         if conn: release_db_connection(conn)
-            
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
