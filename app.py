@@ -335,8 +335,6 @@ def send_telegram_admin_notification(user_name, user_phone, selected_numbers, to
 
     return file_id
 
-# PUBLIC & AUTHENTICATED API ENDPOINTS
-
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "admin_count": len(ADMIN_IDS)}), 200
@@ -360,7 +358,6 @@ def reserve_tickets():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # ROW-LEVEL LOCKING (Prevent Race Conditions)
         cursor.execute("SELECT number, status, user_id FROM tickets WHERE number = ANY(%s) FOR UPDATE;", (numbers,))
         tickets = cursor.fetchall()
 
@@ -373,12 +370,15 @@ def reserve_tickets():
                 conn.rollback()
                 return jsonify({"success": False, "message": f"ቁጥር #{t['number']} ቀደም ሲል በሌላ ሰው ተይዟል!"}), 400
             
-        now = datetime.utcnow()
+        now_utc = datetime.utcnow()
+        # UTC Timezone-Safe Formatting
+        now_iso = now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+
         cursor.execute("""
             UPDATE tickets 
             SET status = 'reserved', user_id = %s, reserved_at = %s, updated_at = %s
             WHERE number = ANY(%s)
-        """, (user_id, now, now, numbers))
+        """, (user_id, now_utc, now_utc, numbers))
         
         conn.commit()
         cursor.close()
@@ -388,7 +388,7 @@ def reserve_tickets():
         notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": "reserved"})
         return jsonify({
             "success": True, 
-            "reserved_at": now.isoformat(),
+            "reserved_at": now_iso,
             "total_price": total_price,
             "savings": savings
         })
@@ -555,7 +555,6 @@ def submit_order():
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-        # ROW-LEVEL LOCK FOR PURCHASE
         cursor.execute("SELECT number, status, user_id FROM tickets WHERE number = ANY(%s) FOR UPDATE;", (selected_numbers,))
         locked_tickets = cursor.fetchall()
 
@@ -567,7 +566,6 @@ def submit_order():
                 conn.rollback()
                 return jsonify({"success": False, "message": f"ቁጥር #{t['number']} የሌላ ሰው ቦታ ማስያዣ ነው!"}), 400
 
-        # Centralized Backend Calculation
         total_price, _ = calculate_total_price(len(selected_numbers))
         price_per_ticket = total_price / len(selected_numbers)
         order_id = f"ORD-{int(time.time())}-{random.randint(100,999)}"
@@ -591,8 +589,6 @@ def submit_order():
         return jsonify({"success": False, "message": f"የሰርቨር ስህተት፦ {str(e)}"}), 500
     finally:
         if conn: release_db_connection(conn)
-
-# ADMIN STRICT ENDPOINTS
 
 @app.route('/api/admin/verify-auth', methods=['POST'])
 def verify_admin_auth():
