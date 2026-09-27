@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "app.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "app.py" },
+    { "src": "/bot/(.*)", "dest": "app.py" },
+    { "src": "/health", "dest": "app.py" },
+    { "src": "/favicon.ico", "dest": "app.py" },
+    { "src": "/admin.html", "dest": "admin.html" },
+    { "src": "/(.*)", "dest": "index.html" }
+  ]
+}
