@@ -1,1 +1,1494 @@
 
+<!DOCTYPE html>
+<html lang="am">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>BYD Sealion 6 | Getachew Fikadu</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+<style>
+:root{
+  --bg:#0a0a0a; --card:#141414; --card2:#1c1c1c; --border:#262626;
+  --text:#f5f5f5; --sub:#8a8a8a; --yellow:#FFC107; --yellow2:#FFB300;
+  --green:#25D366; --red:#E53935; --grey:#3a3a3a;
+}
+body.light{
+  --bg:#f7f7f7; --card:#ffffff; --card2:#f0f0f0; --border:#e3e3e3;
+  --text:#111111; --sub:#666666; --grey:#d5d5d5;
+}
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body{background:var(--bg);color:var(--text);padding-bottom:80px;-webkit-font-smoothing:antialiased;transition:background .2s,color .2s}
+
+/* HEADER */
+.top-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--bg);position:sticky;top:0;z-index:100}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-logo{width:40px;height:40px;background:linear-gradient(135deg,#FFC107,#FF9800);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;color:#000}
+.brand-text{line-height:1.1}
+.brand-text b,.brand-text span{font-size:14px;color:var(--yellow);font-weight:800;display:block}
+.header-actions{display:flex;align-items:center;gap:8px}
+.lang-pill{background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;outline:none}
+.icon-btn{width:38px;height:38px;border-radius:12px;background:var(--card);border:1px solid var(--border);color:var(--text);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:15px}
+
+.tab-page{display:none;padding:0 12px}
+.tab-page.active{display:block}
+
+/* HERO */
+.hero-card{background:var(--card);border-radius:20px;overflow:hidden;margin-bottom:14px;border:1px solid var(--border)}
+.hero-media{position:relative;height:220px;background:#000}
+.hero-media img{width:100%;height:100%;object-fit:cover;display:block}
+.badge-featured{position:absolute;top:14px;left:14px;background:rgba(255,193,7,.15);border:1px solid var(--yellow);color:var(--yellow);padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700}
+.rating{position:absolute;top:14px;right:14px;background:rgba(0,0,0,.55);padding:5px 12px;border-radius:20px;font-size:12px;font-weight:700;color:#fff}
+.rating .star{color:#FFD54F}
+
+.hero-body{padding:16px}
+.hero-body h1{font-size:22px;font-weight:800;margin-bottom:4px}
+.hero-body .subtitle{font-size:14px;color:var(--green);font-weight:600;margin-bottom:8px}
+
+.countdown-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
+.cd-box{background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:12px 6px;text-align:center}
+.cd-box b{display:block;font-size:22px;font-weight:800;color:var(--yellow);line-height:1}
+.cd-box span{display:block;font-size:10px;color:var(--sub);margin-top:4px}
+
+.progress-row{display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px}
+.progress-row .sold-label{color:var(--sub);font-weight:600}
+.progress-row .pct{color:var(--yellow);font-weight:800}
+.progress-bar{height:6px;background:var(--card2);border-radius:6px;overflow:hidden;margin-bottom:10px}
+.progress-fill{height:100%;background:linear-gradient(90deg,#FFC107,#FF9800);border-radius:6px;transition:width .8s ease}
+.progress-fill.warning{background:linear-gradient(90deg,#FF9800,#FF6B6B)}
+.progress-fill.critical{background:linear-gradient(90deg,#E53935,#FF5252)}
+.remaining-text{font-size:12px;color:var(--sub);margin-bottom:16px}
+
+/* BUY CTA */
+.buy-cta{
+  width:100%;background:linear-gradient(135deg,#FFC107,#FFB300);color:#000;
+  border:none;border-radius:14px;padding:16px;font-size:16px;font-weight:800;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  cursor:pointer;box-shadow:0 6px 20px rgba(255,193,7,.25);margin-bottom:14px
+}
+.buy-cta i{font-size:18px}
+.buy-cta:active{transform:scale(.98)}
+
+/* DETAIL PAGE */
+.detail-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.detail-header .title{font-size:16px;font-weight:800}
+.detail-header .subtitle{font-size:12px;color:var(--sub);margin-top:2px}
+.icon-btn-sm{width:36px;height:36px;border-radius:10px;background:var(--card);border:1px solid var(--border);color:var(--text);display:flex;align-items:center;justify-content:center;cursor:pointer}
+
+/* Search + Filter bar */
+.search-row{display:flex;gap:8px;margin-bottom:12px}
+.search-box{flex:1;position:relative}
+.search-box input{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:12px 14px 12px 40px;border-radius:12px;font-size:14px;outline:none}
+.search-box input:focus{border-color:var(--yellow)}
+.search-box i{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--sub)}
+.search-btn{background:var(--yellow);color:#000;border:none;padding:0 16px;border-radius:12px;font-weight:800;cursor:pointer;font-size:13px}
+
+/* Filter chips */
+.filter-row{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:4px}
+.filter-chip{
+  background:var(--card);border:1px solid var(--border);color:var(--sub);
+  padding:8px 14px;border-radius:20px;font-size:12px;font-weight:700;
+  cursor:pointer;white-space:nowrap;transition:.2s
+}
+.filter-chip.active{background:var(--yellow);color:#000;border-color:var(--yellow)}
+
+/* Ticket grid */
+.ticket-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;max-height:52vh;overflow-y:auto;padding:4px 0}
+.ticket-num{
+  aspect-ratio:1;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;cursor:pointer;user-select:none;transition:transform .1s
+}
+.ticket-num.available{
+  background:var(--card2);
+  border:1px solid var(--border);
+  color:var(--text);
+}
+.ticket-num.sold{
+  background:rgba(229,57,53,.08);
+  border:1px solid rgba(229,57,53,.2);
+  color:rgba(255,255,255,.3);
+  cursor:not-allowed;
+  opacity:.55;
+}
+body.light .ticket-num.sold{color:rgba(0,0,0,.3)}
+.ticket-num.pending{
+  background:rgba(255,152,0,.12);
+  border:1px solid rgba(255,152,0,.3);
+  color:#ffb74d;cursor:not-allowed
+}
+.ticket-num.reserved{
+  background:rgba(33,150,243,.12);
+  border:1px solid rgba(33,150,243,.3);
+  color:#64b5f6;cursor:not-allowed
+}
+.ticket-num.selected{
+  background:var(--yellow);color:#000;
+  border:2px solid var(--yellow);
+  box-shadow:0 0 12px rgba(255,193,7,.5)
+}
+.ticket-num:active{transform:scale(.94)}
+.ticket-num.highlight{animation:pulseYellow 1.5s ease infinite}
+@keyframes pulseYellow{
+  0%,100%{box-shadow:0 0 0 3px rgba(255,193,7,.4)}
+  50%{box-shadow:0 0 0 8px rgba(255,193,7,.15)}
+}
+
+/* Empty filter message */
+.empty-grid{
+  grid-column:1/-1;text-align:center;padding:40px 20px;
+  color:var(--sub);font-size:13px
+}
+
+/* Load more */
+.load-more{width:100%;padding:12px;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:12px;font-weight:700;font-size:13px;cursor:pointer;margin:8px 0}
+.load-more:disabled{opacity:.5}
+
+/* Reservation bar */
+.reservation-bar{
+  position:fixed;bottom:88px;left:12px;right:12px;
+  background:rgba(255,152,0,.15);border:1px solid #ffb74d;color:#ffb74d;
+  padding:10px 14px;border-radius:12px;font-size:12px;font-weight:700;
+  text-align:center;z-index:95;display:none
+}
+.reservation-bar.show{display:block}
+
+/* Bottom CTA */
+.bottom-cta{position:fixed;bottom:16px;left:16px;right:16px;z-index:90}
+.cta-green{
+  width:100%;background:var(--green);color:#fff;border:none;border-radius:14px;
+  padding:15px;font-size:15px;font-weight:800;display:flex;align-items:center;
+  justify-content:center;gap:10px;cursor:pointer;
+  box-shadow:0 8px 24px rgba(37,211,102,.3)
+}
+.cta-green .qty-circle{
+  width:26px;height:26px;background:#fff;color:var(--green);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800
+}
+.cta-green:disabled{background:#2a2a2a;color:#666;box-shadow:none;cursor:not-allowed}
+.cta-green:disabled .qty-circle{background:#444;color:#888}
+
+/* CHECKOUT */
+.steps-header{margin-bottom:20px}
+.steps-header .title{font-size:20px;font-weight:800;margin-bottom:4px}
+.steps-header .sub{font-size:12px;color:var(--sub);margin-bottom:14px}
+.steps-bar{display:flex;gap:4px}
+.steps-bar .seg{flex:1;background:var(--card2);border-radius:4px;height:4px}
+.steps-bar .seg.active{background:var(--yellow)}
+
+.form-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:14px}
+.form-card .row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px}
+.form-card .row:last-child{border-bottom:none}
+.form-card .row .lbl{color:var(--sub)}
+.form-card .row .val{font-weight:700}
+.form-card .row .val.total{color:var(--yellow);font-size:16px}
+
+.badge-num{
+  display:inline-block;background:rgba(255,193,7,.15);color:var(--yellow);
+  border:1px solid var(--yellow);border-radius:8px;padding:4px 10px;
+  font-size:12px;font-weight:700;margin:2px
+}
+.badges-wrap{margin-top:8px;display:flex;flex-wrap:wrap;gap:4px}
+
+/* Bank info with copy */
+.bank-account{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:10px 0;border-bottom:1px solid var(--border);font-size:13px
+}
+.bank-account:last-child{border-bottom:none}
+.bank-account strong{color:var(--yellow);font-size:12px;display:block;margin-bottom:2px}
+.bank-account .number{font-family:'Courier New',monospace;font-weight:700;font-size:13px}
+.copy-btn{
+  background:rgba(255,193,7,.15);color:var(--yellow);border:1px solid var(--yellow);
+  padding:5px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer
+}
+.copy-btn:active{transform:scale(.95)}
+
+.form-label{font-size:12px;color:var(--sub);margin:14px 0 6px;display:block;font-weight:600}
+.input-wrap{position:relative}
+.input-wrap i{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--sub)}
+.form-input{
+  width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);
+  padding:14px 14px 14px 42px;border-radius:12px;font-size:14px;outline:none;font-weight:500
+}
+.form-input:focus{border-color:var(--yellow)}
+
+/* Receipt box */
+.receipt-box{
+  min-height:140px;
+  background:rgba(255,193,7,.04);
+  border:2px dashed rgba(255,193,7,.4);
+  border-radius:12px;padding:24px;text-align:center;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  transition:.2s
+}
+.receipt-box:active{background:rgba(255,193,7,.08)}
+.receipt-box i{font-size:36px;color:var(--yellow);margin-bottom:10px;display:block}
+.receipt-box p{font-size:13px;color:var(--text);font-weight:600}
+.receipt-box .hint{font-size:11px;color:var(--sub);margin-top:6px}
+.receipt-box.has-file{
+  border-color:var(--green);border-style:solid;
+  background:rgba(37,211,102,.06)
+}
+.receipt-box.has-file i{color:var(--green)}
+
+.step-actions{display:flex;gap:10px;margin-top:20px}
+.btn-secondary{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);padding:14px;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer}
+.btn-primary{
+  flex:2;background:linear-gradient(135deg,#FFC107,#FFB300);color:#000;border:none;
+  padding:14px;border-radius:12px;font-size:14px;font-weight:800;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px
+}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+
+/* BOTTOM NAV */
+.bottom-nav{
+  position:fixed;bottom:0;left:0;right:0;background:var(--bg);
+  border-top:1px solid var(--border);display:flex;justify-content:space-around;
+  padding:10px 0 14px;z-index:99
+}
+.nav-btn{
+  background:none;border:none;color:var(--sub);font-size:10px;font-weight:600;
+  display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;flex:1
+}
+.nav-btn i{font-size:18px}
+.nav-btn.active{color:var(--yellow)}
+
+/* MODAL */
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;align-items:flex-end;justify-content:center}
+.modal.show{display:flex}
+.modal-content{
+  background:var(--card);width:100%;max-width:500px;
+  border-top-left-radius:24px;border-top-right-radius:24px;
+  padding:24px;max-height:90vh;overflow-y:auto
+}
+
+/* TOAST */
+#appToast{
+  position:fixed;left:50%;bottom:100px;transform:translate(-50%,20px);
+  z-index:99999;max-width:calc(100vw - 32px);padding:12px 18px;border-radius:12px;
+  background:rgba(30,30,30,.98);border:1px solid var(--border);color:#fff;
+  font-size:13px;font-weight:600;opacity:0;pointer-events:none;
+  transition:.22s ease;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.4)
+}
+#appToast.show{opacity:1;transform:translate(-50%,0)}
+
+.share-card{width:100%;border-radius:16px;background:linear-gradient(135deg,#1a1a1a,#0a0a0a);border:1px solid var(--border);color:#fff;padding:24px;text-align:center;margin:16px 0}
+.share-card h3{color:var(--yellow);font-size:18px;margin-bottom:8px}
+.share-card .nums b{color:var(--yellow)}
+
+.section-card{background:var(--card);margin:12px 0;padding:16px;border-radius:16px;border:1px solid var(--border)}
+.section-card h3{font-size:14px;font-weight:800;margin-bottom:10px}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.stat-box{padding:12px 6px;border-radius:12px;text-align:center}
+.stat-box span{font-size:10px;font-weight:700;display:block;margin-bottom:4px}
+.stat-box h4{font-size:16px;font-weight:800}
+.sb-green{background:rgba(37,211,102,.1);color:var(--green)}
+.sb-yellow{background:rgba(255,193,7,.1);color:var(--yellow)}
+.sb-orange{background:rgba(255,152,0,.1);color:#ff9800}
+
+/* Empty state */
+.empty-state{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:40px 20px;text-align:center
+}
+.empty-icon{
+  width:72px;height:72px;border-radius:50%;background:rgba(255,193,7,.1);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--yellow);font-size:28px;margin-bottom:16px
+}
+.empty-state h3{font-size:16px;font-weight:800;margin-bottom:6px}
+.empty-state p{font-size:12px;color:var(--sub);margin-bottom:20px;line-height:1.5}
+
+.admin-input{width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:10px;font-size:13px;outline:none;margin-top:6px}
+.admin-btn{width:100%;background:var(--yellow);color:#000;border:none;padding:12px;border-radius:10px;font-weight:800;font-size:13px;margin-top:8px;cursor:pointer}
+
+#offlineScreen{display:none;position:fixed;inset:0;background:var(--bg);z-index:9999;flex-direction:column;justify-content:center;align-items:center;padding:24px;text-align:center}
+</style>
+</head>
+<body>
+
+<div id="appToast" role="status"></div>
+
+<div id="offlineScreen">
+  <i class="fa-solid fa-wifi" style="font-size:48px;color:var(--red);margin-bottom:16px"></i>
+  <h2 id="offlineTitle" style="margin-bottom:8px">የኢንተርኔት ግንኙነት የለም!</h2>
+  <p style="color:var(--sub);font-size:13px;margin-bottom:20px">እባክዎ ግንኙነትዎን አረጋግተው እንደገና ይሞክሩ።</p>
+  <button class="btn-primary" onclick="location.reload()" style="padding:12px 24px">እንደገና ሞክር</button>
+</div>
+
+<!-- HEADER -->
+<div class="top-header">
+  <div class="brand">
+    <div class="brand-logo"><i class="fa-solid fa-trophy"></i></div>
+    <div class="brand-text"><b>Getachew</b><span>Fikadu</span></div>
+  </div>
+  <div class="header-actions">
+    <select class="lang-pill" id="langSelect" onchange="changeLanguage(this.value)">
+      <option value="am">🇪🇹 አማርኛ</option>
+      <option value="en">🇬🇧 English</option>
+      <option value="om">🇪🇹 Oromiffa</option>
+    </select>
+    <button class="icon-btn" onclick="toggleTheme()"><i class="fa-solid fa-sun" id="themeIcon"></i></button>
+  </div>
+</div>
+
+<!-- ========== HOME PAGE ========== -->
+<div id="homePage" class="tab-page active">
+  <div class="hero-card">
+    <div class="hero-media">
+      <img src="https://images.unsplash.com/photo-1617814076367-b759c7d7e738?auto=format&fit=crop&w=900&q=80" alt="BYD Sealion 6">
+      <span class="badge-featured" data-i18n="featured">🔥 ተመራጭ</span>
+      <span class="rating"><span class="star">★</span> <span id="ratingValue">5.0</span></span>
+    </div>
+    <div class="hero-body">
+      <h1>BYD Sealion 6</h1>
+      <div class="subtitle">Shark Grey</div>
+
+      <div style="font-size:12px;color:var(--sub);margin-bottom:10px;margin-top:12px" data-i18n="timeLeft">የቀረ ጊዜ</div>
+      <div class="countdown-grid">
+        <div class="cd-box"><b id="cdDays">00</b><span data-i18n="days">ቀናት</span></div>
+        <div class="cd-box"><b id="cdHours">00</b><span data-i18n="hours">ሰዓት</span></div>
+        <div class="cd-box"><b id="cdMins">00</b><span data-i18n="mins">ደቂቃ</span></div>
+        <div class="cd-box"><b id="cdSecs">00</b><span data-i18n="secs">ሰከንድ</span></div>
+      </div>
+
+      <div class="progress-row">
+        <span class="sold-label"><span id="soldCount">0</span> <span data-i18n="sold">የተሸጡ</span></span>
+        <span class="pct" id="pctText">0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progressBar"></div></div>
+      <div class="remaining-text"><span id="availCount">3500</span> <span data-i18n="remaining">የቀሩ</span></div>
+
+      <button class="buy-cta" onclick="openDetail()">
+        <i class="fa-solid fa-ticket"></i>
+        <span data-i18n="buyTicket">ቲኬት ይግዙ</span>
+      </button>
+
+      <button class="btn-secondary" style="width:100%" onclick="shareApp()">
+        <i class="fa-solid fa-share-nodes"></i>
+        <span data-i18n="shareInvite">ጓደኛ ይጋብዙ እና ያሸንፉ</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== DETAIL PAGE ========== -->
+<div id="detailPage" class="tab-page">
+  <div class="detail-header">
+    <button class="icon-btn-sm" onclick="switchTab('homePage')"><i class="fa-solid fa-arrow-left"></i></button>
+    <div>
+      <div class="title" style="font-size:16px" data-i18n="selectNumbers">ቁጥሮች ይምረጡ</div>
+    </div>
+    <button class="icon-btn-sm" onclick="switchTab('homePage')"><i class="fa-solid fa-xmark"></i></button>
+  </div>
+
+  <div style="font-size:12px;color:var(--sub);margin-bottom:12px" id="selectHint">0 / 20</div>
+
+  <div class="search-row">
+    <div class="search-box">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="number" id="searchInput" placeholder="ቁጥር ፈልግ (2456)"
+             onkeypress="if(event.key==='Enter')searchTicket()">
+    </div>
+    <button class="search-btn" onclick="searchTicket()" data-i18n="search">ፈልግ</button>
+  </div>
+
+  <div class="filter-row">
+    <button class="filter-chip active" data-filter="all" onclick="filterGrid(this,'all')" data-i18n="filterAll">ሁሉም</button>
+    <button class="filter-chip" data-filter="available" onclick="filterGrid(this,'available')" data-i18n="filterAvailable">🟢 ነፃ</button>
+    <button class="filter-chip" data-filter="selected" onclick="filterGrid(this,'selected')" data-i18n="filterSelected">🟡 የተመረጠ</button>
+    <button class="filter-chip" data-filter="sold" onclick="filterGrid(this,'sold')" data-i18n="filterSold">🔴 የተሸጠ</button>
+  </div>
+
+  <div class="ticket-grid" id="ticketGrid"></div>
+  <button class="load-more" id="loadMoreBtn" onclick="loadMore()">Load More</button>
+
+  <div class="bottom-cta">
+    <button class="cta-green" id="continueBtn" disabled onclick="openCheckout()">
+      <span class="qty-circle" id="ctaCount">0</span>
+      <span data-i18n="continue">ቀጥል</span>
+    </button>
+  </div>
+</div>
+
+<!-- ========== CHECKOUT PAGE ========== -->
+<div id="checkoutPage" class="tab-page">
+  <div class="steps-header">
+    <div class="title" data-i18n="completeCheckout">ግዢዎን ያጠናቅቁ</div>
+    <div class="sub" id="stepLabel">1 / 3</div>
+    <div class="steps-bar">
+      <div class="seg active" id="seg1"></div>
+      <div class="seg" id="seg2"></div>
+      <div class="seg" id="seg3"></div>
+    </div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div id="step1">
+    <div class="form-card">
+      <div class="row">
+        <span class="lbl" data-i18n="product">ምርት</span>
+        <span class="val">BYD Sealion 6</span>
+      </div>
+      <div class="row">
+        <span class="lbl" data-i18n="totalTickets">ጠቅላላ ቲኬቶች</span>
+        <span class="val" id="s1Count">1</span>
+      </div>
+      <div class="row">
+        <span class="lbl" data-i18n="yourNumbers">ቁጥሮችዎ</span>
+        <span class="val"></span>
+      </div>
+      <div class="badges-wrap" id="s1Nums"></div>
+      <div class="row" style="margin-top:8px">
+        <span class="lbl" data-i18n="totalPrice">ጠቅላላ ዋጋ</span>
+        <span class="val total" id="s1Total">-</span>
+      </div>
+      <div class="row" id="discountRow" style="display:none">
+        <span class="lbl" style="color:var(--green)" data-i18n="discount">ቅናሽ</span>
+        <span class="val" style="color:var(--green)" id="s1Discount">-</span>
+      </div>
+    </div>
+
+    <label class="form-label" data-i18n="fullName">ሙሉ ስም</label>
+    <div class="input-wrap">
+      <i class="fa-regular fa-user"></i>
+      <input type="text" class="form-input" id="inputName" placeholder="ሙሉ ስምዎን ያስገቡ">
+    </div>
+    <label class="form-label" data-i18n="phone">ስልክ ቁጥር</label>
+    <div class="input-wrap">
+      <i class="fa-solid fa-phone"></i>
+      <input type="tel" class="form-input" id="inputPhone" placeholder="09xxxxxxxx">
+    </div>
+
+    <div class="step-actions">
+      <button class="btn-secondary" onclick="switchTab('detailPage')" data-i18n="back">ተመለስ</button>
+      <button class="btn-primary" onclick="goStep(2)">
+        <span data-i18n="continue">ቀጥል</span>
+        <i class="fa-solid fa-chevron-right"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- STEP 2: Bank Info + Receipt Upload -->
+  <div id="step2" style="display:none">
+    <div class="form-card">
+      <div class="row"><span class="lbl" data-i18n="name">ስም</span><span class="val" id="s2Name">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="phone">ስልክ</span><span class="val" id="s2Phone">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="tickets">ቲኬቶች</span><span class="val" id="s2Count">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="totalPrice">ጠቅላላ</span><span class="val total" id="s2Total">-</span></div>
+    </div>
+
+    <div class="form-label" data-i18n="bankInfo">የክፍያ አማራጮች</div>
+    <div class="form-card" style="padding:8px 16px">
+      <div class="bank-account">
+        <div>
+          <strong>🏦 CBE Bank</strong>
+          <span class="number">1000543210987</span>
+        </div>
+        <button class="copy-btn" onclick="copyText('1000543210987')">📋 Copy</button>
+      </div>
+      <div class="bank-account">
+        <div>
+          <strong>📱 Telebirr</strong>
+          <span class="number">0912345678</span>
+        </div>
+        <button class="copy-btn" onclick="copyText('0912345678')">📋 Copy</button>
+      </div>
+    </div>
+
+    <!-- RECEIPT UPLOAD MOVED HERE -->
+    <div class="form-label" data-i18n="receipt">የክፍያ ማረጋገጫ</div>
+    <div class="receipt-box" id="receiptBox" onclick="document.getElementById('receiptInput').click()">
+      <i class="fa-solid fa-cloud-arrow-up"></i>
+      <p id="receiptText" data-i18n="uploadReceipt">ደረሰኝ ስክሪንሾት ለመጫን እዚህ ይጫኑ</p>
+      <div class="hint" data-i18n="uploadHint">JPG / PNG · ከ 5MB በታች</div>
+      <input type="file" id="receiptInput" accept="image/*" style="display:none" onchange="processReceipt(event)">
+    </div>
+
+    <div class="step-actions">
+      <button class="btn-secondary" onclick="goStep(1)" data-i18n="back">ተመለስ</button>
+      <button class="btn-primary" onclick="goStep(3)">
+        <span data-i18n="continue">ቀጥል</span>
+        <i class="fa-solid fa-chevron-right"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- STEP 3: Final Summary + Pay -->
+  <div id="step3" style="display:none">
+    <div class="form-card">
+      <div class="row"><span class="lbl" data-i18n="product">ምርት</span><span class="val">BYD Sealion 6</span></div>
+      <div class="row"><span class="lbl" data-i18n="name">ስም</span><span class="val" id="s3Name">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="tickets">ቲኬቶች</span><span class="val" id="s3Count">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="phone">ስልክ</span><span class="val" id="s3Phone">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="yourNumbers">ቁጥሮችዎ</span><span class="val"></span></div>
+      <div class="badges-wrap" id="s3Nums"></div>
+      <div class="row" style="margin-top:8px">
+        <span class="lbl" data-i18n="totalPrice">ጠቅላላ</span>
+        <span class="val total" id="s3Total">-</span>
+      </div>
+    </div>
+
+    <div class="step-actions">
+      <button class="btn-secondary" onclick="goStep(2)" data-i18n="back">ተመለስ</button>
+      <button class="btn-primary" id="payBtn" onclick="submitOrder()">
+        <span data-i18n="pay">ተክፈል</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== PROFILE PAGE ========== -->
+<div id="profilePage" class="tab-page">
+  <div class="section-card">
+    <h3><i class="fa-solid fa-id-card"></i> <span data-i18n="userInfo">የተጠቃሚ መረጃ</span></h3>
+    <div class="form-card" style="padding:12px;margin:0">
+      <div class="row"><span class="lbl" data-i18n="name">ስም</span><span class="val" id="profName">-</span></div>
+      <div class="row"><span class="lbl" data-i18n="phone">ስልክ</span><span class="val" id="profPhone">-</span></div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3><i class="fa-solid fa-users"></i> <span data-i18n="referral">የሪፈራል ዳሽቦርድ</span></h3>
+    <div class="stat-grid" style="grid-template-columns:1fr 1fr">
+      <div class="stat-box sb-green">
+        <span data-i18n="invited">የተጋበዙ</span>
+        <h4 id="refTotalUsers">0</h4>
+      </div>
+      <div class="stat-box sb-yellow">
+        <span data-i18n="bought">የገዙ</span>
+        <h4 id="refBoughtUsers">0</h4>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <h3><i class="fa-solid fa-ticket"></i> <span data-i18n="myTickets">የእኔ ቲኬቶች</span></h3>
+    <div class="stat-grid" style="margin-bottom:12px">
+      <div class="stat-box sb-green"><span data-i18n="activeStat">ንቁ</span><h4 id="statActive">0</h4></div>
+      <div class="stat-box sb-yellow"><span data-i18n="pendingStat">በመጠባበቅ</span><h4 id="statPending">0</h4></div>
+      <div class="stat-box sb-orange"><span data-i18n="totalStat">ጠቅላላ</span><h4 id="statTotal">0</h4></div>
+    </div>
+    <div id="myTicketsList"></div>
+  </div>
+
+  <div class="section-card" id="adminSection" style="display:none">
+    <h3><i class="fa-solid fa-user-shield"></i> <span data-i18n="adminPanel">የአድሚን ፓነል</span></h3>
+    <div class="stat-grid" style="grid-template-columns:1fr 1fr;margin-bottom:10px">
+      <div class="stat-box sb-green"><span data-i18n="revenue">ገቢ</span><h4 id="totalRevenueStat">0</h4></div>
+      <div class="stat-box sb-yellow"><span data-i18n="pendingStat">በመጠባበቅ</span><h4 id="pendingCountStat">0</h4></div>
+    </div>
+    <input type="text" class="admin-input" id="adminTicketNumbers" placeholder="1,2,3">
+    <select class="admin-input" id="adminStatusSelect">
+      <option value="sold">✅ Sold</option>
+      <option value="available">🟢 Available</option>
+    </select>
+    <button class="admin-btn" onclick="adminUpdateTicketStatus()" data-i18n="updateStatus">ሁኔታ አዘምን</button>
+    <input type="text" class="admin-input" id="broadcastMsgInput" placeholder="መልእክት">
+    <button class="admin-btn" style="background:#28a745;color:#fff" onclick="sendBroadcastMessage()">📢 <span data-i18n="broadcast">አስተላልፍ</span></button>
+  </div>
+</div>
+
+<!-- SUCCESS MODAL -->
+<div class="modal" id="successModal">
+  <div class="modal-content" style="text-align:center">
+    <div style="font-size:56px;color:var(--green);margin-bottom:12px"><i class="fa-solid fa-circle-check"></i></div>
+    <h3 style="font-size:20px;margin-bottom:6px" data-i18n="orderSent">ትዕዛዝ ተልኳል!</h3>
+    <p style="font-size:12px;color:var(--sub)">Order: <b id="successOrderId" style="color:var(--yellow)"></b></p>
+    <div class="share-card">
+      <h3>🎟️ BYD Sealion 6</h3>
+      <div style="font-size:11px;color:var(--sub);margin-top:6px" id="cardOrderId"></div>
+      <div class="nums" style="margin-top:10px;font-size:12px" data-i18n="yourNumbers">ቁጥሮችዎ</div>
+      <div class="nums"><b id="cardTicketNums"></b></div>
+    </div>
+    <button class="btn-primary" style="width:100%;margin-top:12px" onclick="closeSuccessModal()" data-i18n="close">ዝጋ</button>
+  </div>
+</div>
+
+<div class="reservation-bar" id="reservationBar"></div>
+
+<!-- BOTTOM NAV -->
+<div class="bottom-nav">
+  <button class="nav-btn active" data-tab="homePage" onclick="switchTab('homePage')">
+    <i class="fa-solid fa-house"></i><span data-i18n="navHome">መነሻ</span>
+  </button>
+  <button class="nav-btn" data-tab="detailPage" onclick="openDetail()">
+    <i class="fa-solid fa-ticket"></i><span data-i18n="navTickets">ቲኬቶች</span>
+  </button>
+  <button class="nav-btn" data-tab="profilePage" onclick="switchTab('profilePage')">
+    <i class="fa-regular fa-user"></i><span data-i18n="navProfile">መገለጫ</span>
+  </button>
+</div>
+
+<script>
+// ====================================================
+// CONFIG
+// ====================================================
+const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+  ? 'http://localhost:5000'
+  : 'https://new-app-bot-1.onrender.com';
+
+const BOT_USERNAME = 'Onlineitabot';
+const PRODUCT_NAME = 'BYD Sealion 6';
+
+let TOTAL_TICKETS = 3500;
+let BASE_PRICE = 3500;
+let MAX_PER_ORDER = 20;
+let RESERVATION_MIN = 15;
+let PRICING_TIERS = [];
+
+// ====================================================
+// i18n
+// ====================================================
+const I18N = {
+  am: {
+    featured:'🔥 ተመራጭ', timeLeft:'የቀረ ጊዜ',
+    days:'ቀናት', hours:'ሰዓት', mins:'ደቂቃ', secs:'ሰከንድ',
+    sold:'የተሸጡ', remaining:'የቀሩ', buyTicket:'ቲኬት ይግዙ',
+    shareInvite:'ጓደኛ ይጋብዙ እና ያሸንፉ',
+    selectNumbers:'ቁጥሮች ይምረጡ',
+    search:'ፈልግ',
+    filterAll:'ሁሉም', filterAvailable:'🟢 ነፃ', filterSelected:'🟡 የተመረጠ', filterSold:'🔴 የተሸጠ',
+    continue:'ቀጥል', completeCheckout:'ግዢዎን ያጠናቅቁ',
+    product:'ምርት', totalTickets:'ጠቅላላ ቲኬቶች',
+    totalPrice:'ጠቅላላ ዋጋ', discount:'ቅናሽ',
+    fullName:'ሙሉ ስም', phone:'ስልክ ቁጥር',
+    bankInfo:'የክፍያ አማራጮች',
+    name:'ስም', tickets:'ቲኬቶች', yourNumbers:'ቁጥሮችዎ',
+    receipt:'የክፍያ ማረጋገጫ',
+    uploadReceipt:'ደረሰኝ ስክሪንሾት ለመጫን እዚህ ይጫኑ',
+    uploadHint:'JPG / PNG · ከ 5MB በታች',
+    pay:'ተክፈል', back:'ተመለስ',
+    userInfo:'የተጠቃሚ መረጃ',
+    referral:'የሪፈራል ዳሽቦርድ', invited:'የተጋበዙ',
+    bought:'የገዙ', myTickets:'የእኔ ቲኬቶች',
+    activeStat:'ንቁ', pendingStat:'በመጠባበቅ', totalStat:'ጠቅላላ',
+    adminPanel:'የአድሚን ፓነል',
+    revenue:'ገቢ', updateStatus:'ሁኔታ አዘምን', broadcast:'አስተላልፍ',
+    orderSent:'ትዕዛዝ ተልኳል!', close:'ዝጋ',
+    navHome:'መነሻ', navTickets:'ቲኬቶች', navProfile:'መገለጫ',
+    reservedFor:'ተይዟል ለ', expired:'ጊዜው አልቋል',
+    copied:'ተቀድቷል', noTickets:'ምንም ቲኬት አልገዙም',
+    noTicketsDesc:'የመጀመሪያ ቲኬትዎን ይግዙ እና እድልዎን ይፈትኑ!',
+    buyNow:'🎟️ አሁን ቲኬት ይግዙ',
+    pleaseEnter:'እባክዎ ያስገቡ', selectAtLeast1:'ቢያንስ 1 ቲኬት ይምረጡ',
+    maxTickets:'ቢያንስ {n} ቲኬቶች ብቻ',
+    noMatch:'ምንም የሚመጣጠን ቁጥር የለም',
+    shareText:'🎟️ BYD Sealion 6 እድል! ይግዙ እና ያሸንፉ!'
+  },
+  en: {
+    featured:'🔥 Featured', timeLeft:'Time Left',
+    days:'Days', hours:'Hours', mins:'Mins', secs:'Secs',
+    sold:'Sold', remaining:'Remaining', buyTicket:'Buy Tickets',
+    shareInvite:'Invite Friends & Win',
+    selectNumbers:'Select Numbers',
+    search:'Search',
+    filterAll:'All', filterAvailable:'🟢 Available', filterSelected:'🟡 Selected', filterSold:'🔴 Sold',
+    continue:'Continue', completeCheckout:'Complete Your Purchase',
+    product:'Product', totalTickets:'Total Tickets',
+    totalPrice:'Total Price', discount:'Discount',
+    fullName:'Full Name', phone:'Phone Number',
+    bankInfo:'Payment Options',
+    name:'Name', tickets:'Tickets', yourNumbers:'Your Numbers',
+    receipt:'Payment Receipt',
+    uploadReceipt:'Click to upload receipt screenshot',
+    uploadHint:'JPG / PNG · under 5MB',
+    pay:'Pay', back:'Back',
+    userInfo:'User Info',
+    referral:'Referral Dashboard', invited:'Invited',
+    bought:'Purchased', myTickets:'My Tickets',
+    activeStat:'Active', pendingStat:'Pending', totalStat:'Total',
+    adminPanel:'Admin Panel',
+    revenue:'Revenue', updateStatus:'Update Status', broadcast:'Broadcast',
+    orderSent:'Order Sent!', close:'Close',
+    navHome:'Home', navTickets:'Tickets', navProfile:'Profile',
+    reservedFor:'Reserved for', expired:'Expired',
+    copied:'Copied', noTickets:'No tickets yet',
+    noTicketsDesc:'Buy your first ticket and try your luck!',
+    buyNow:'🎟️ Buy Now',
+    pleaseEnter:'Please enter', selectAtLeast1:'Select at least 1 ticket',
+    maxTickets:'Max {n} tickets',
+    noMatch:'No matching tickets',
+    shareText:'🎟️ BYD Sealion 6 Giveaway! Buy and Win!'
+  },
+  om: {
+    featured:'🔥 Filatamaa', timeLeft:'Yeroo Hafe',
+    days:'Guyyaa', hours:'Sa\'aatii', mins:'Daqiiqaa', secs:'Sekondii',
+    sold:'Gurgurame', remaining:'Hafe', buyTicket:'Tikeetii Bitadhaa',
+    shareInvite:'Hiriyoota Afeeri & Mo\'adhu',
+    selectNumbers:'Lakkoofsa Filadhaa',
+    search:'Barbaadi',
+    filterAll:'Hunda', filterAvailable:'🟢 Jira', filterSelected:'🟡 Filatame', filterSold:'🔴 Gurgurame',
+    continue:'Itti Fufi', completeCheckout:'Bittaa Xumuri',
+    product:'Oomisha', totalTickets:'Tikeetii Waliigala',
+    totalPrice:'Gatii Waliigala', discount:'Hir\'ina',
+    fullName:'Maqaa Guutuu', phone:'Lakkoofsa Bilbilaa',
+    bankInfo:'Filannoo Kaffaltii',
+    name:'Maqaa', tickets:'Tikeetii', yourNumbers:'Lakkoofsa Keessan',
+    receipt:'Ragaa Kaffaltii',
+    uploadReceipt:'Ragaa ol kaa\'uuf cuqaasi',
+    uploadHint:'JPG / PNG · 5MB gadi',
+    pay:'Kaffali', back:'Deebi\'i',
+    userInfo:'Odeeffannoo Fayyadamaa',
+    referral:'Daashboordii Referral', invited:'Afeerame',
+    bought:'Bitame', myTickets:'Tikeetii Koo',
+    activeStat:'Socho\'aa', pendingStat:'Eegaa', totalStat:'Waliigala',
+    adminPanel:'Paanaalii Admin',
+    revenue:'Galii', updateStatus:'Haala Haaromsi', broadcast:'Beeksisi',
+    orderSent:'Ajajni Ergame!', close:'Cufi',
+    navHome:'Mana', navTickets:'Tikeetii', navProfile:'Profaayilii',
+    reservedFor:'Qabameef', expired:'Yeroon darbee',
+    copied:'Waraabame', noTickets:'Tikeetiin hin jiru',
+    noTicketsDesc:'Tikeetii jalqabaa bitiitii carraa kee yaali!',
+    buyNow:'🎟️ Amma Bitadhaa',
+    pleaseEnter:'Maaloo galmeessi', selectAtLeast1:'Yoo xiqqaate 1 tikeetii filadhu',
+    maxTickets:'Baay\'ina {n} qofa',
+    noMatch:'Lakkoofsi wal simu hin jiru',
+    shareText:'🎟️ BYD Sealion 6 Carraa! Bitiitii Mo\'adhu!'
+  }
+};
+
+let currentLang = localStorage.getItem('lang') || 'am';
+
+function t(key, params){
+  let str = (I18N[currentLang] && I18N[currentLang][key]) || I18N['am'][key] || key;
+  if(params) Object.keys(params).forEach(k => str = str.replace(`{${k}}`, params[k]));
+  return str;
+}
+
+function applyTranslations(){
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    el.textContent = t(el.getAttribute('data-i18n'));
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el=>{
+    el.placeholder = t(el.getAttribute('data-i18n-ph'));
+  });
+  document.documentElement.lang = currentLang;
+  const searchInput = document.getElementById('searchInput');
+  if(searchInput){
+    searchInput.placeholder = currentLang === 'am' ? 'ቁጥር ፈልግ (2456)'
+      : currentLang === 'en' ? 'Search number (2456)'
+      : 'Lakkoofsa barbaadi (2456)';
+  }
+  updateCTA();
+  updateReservationBar();
+}
+
+function changeLanguage(lang){
+  currentLang = lang;
+  localStorage.setItem('lang', lang);
+  applyTranslations();
+}
+
+// ====================================================
+// THEME
+// ====================================================
+function toggleTheme(){
+  document.body.classList.toggle('light');
+  const isLight = document.body.classList.contains('light');
+  document.getElementById('themeIcon').className = isLight ? 'fa-solid fa-moon' : 'fa-solid fa-sun';
+  localStorage.setItem('theme', isLight ? 'light' : 'dark');
+}
+
+// ====================================================
+// STATE
+// ====================================================
+let ticketsData = {};
+let selectedNumbers = [];
+let telegramUser = null;
+let userFetchedPhone = '';
+let userFetchedName = '';
+let userIsAdmin = false;
+let receiptBase64 = null;
+let reservationExpiresAt = null;
+let reservationTimer = null;
+let countdownTimer = null;
+let gridPage = 0;
+let gridLoading = false;
+let currentFilter = 'all';
+let currentPricing = { total: 0, discount: 0 };
+
+const tg = window.Telegram.WebApp;
+tg.ready(); tg.expand();
+
+// ====================================================
+// TOAST
+// ====================================================
+let toastTimer;
+function showToast(msg){
+  const el = document.getElementById('appToast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 3000);
+}
+
+function copyText(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>showToast('✅ '+t('copied')))
+      .catch(()=>fallbackCopy(text));
+  } else fallbackCopy(text);
+}
+function fallbackCopy(text){
+  const ta = document.createElement('textarea');
+  ta.value = text; document.body.appendChild(ta); ta.select();
+  document.execCommand('copy'); document.body.removeChild(ta);
+  showToast('✅ '+t('copied'));
+}
+
+function shareApp(){
+  const userId = telegramUser?.id || '';
+  const shareUrl = `https://t.me/${BOT_USERNAME}?start=ref_${userId}`;
+  const text = t('shareText');
+  const url = `https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(text)}`;
+  if(tg.openTelegramLink) tg.openTelegramLink(url);
+  else window.open(url, '_blank');
+}
+
+// ====================================================
+// TABS
+// ====================================================
+function switchTab(id){
+  document.querySelectorAll('.tab-page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(b=>{ if(b.dataset.tab===id) b.classList.add('active'); });
+  window.scrollTo(0,0);
+}
+function openDetail(){
+  switchTab('detailPage');
+  if(Object.keys(ticketsData).length === 0) loadTicketsPage(0, true);
+}
+
+// ====================================================
+// COUNTDOWN
+// ====================================================
+function startCountdown(targetMs){
+  if(countdownTimer) clearInterval(countdownTimer);
+  const tick = ()=>{
+    const diff = targetMs - Date.now();
+    if(diff <= 0){
+      ['cdDays','cdHours','cdMins','cdSecs'].forEach(id=>document.getElementById(id).textContent='00');
+      clearInterval(countdownTimer);
+      return;
+    }
+    const d = Math.floor(diff/86400000);
+    const h = Math.floor((diff%86400000)/3600000);
+    const m = Math.floor((diff%3600000)/60000);
+    const s = Math.floor((diff%60000)/1000);
+    document.getElementById('cdDays').textContent = String(d).padStart(2,'0');
+    document.getElementById('cdHours').textContent = String(h).padStart(2,'0');
+    document.getElementById('cdMins').textContent = String(m).padStart(2,'0');
+    document.getElementById('cdSecs').textContent = String(s).padStart(2,'0');
+  };
+  tick();
+  countdownTimer = setInterval(tick, 1000);
+}
+
+// ====================================================
+// LOAD TICKETS
+// ====================================================
+async function loadTicketsPage(page, reset){
+  if(gridLoading) return;
+  gridLoading = true;
+  try{
+    const r = await fetch(`${API_BASE}/api/tickets/list?page=${page+1}&per_page=100&filter=all`);
+    const d = await r.json();
+    if(d.success){
+      if(reset){ ticketsData = {}; gridPage = 0; }
+      Object.assign(ticketsData, d.tickets);
+      gridPage = page + 1;
+      renderGrid();
+      document.getElementById('loadMoreBtn').style.display = d.has_more ? 'block' : 'none';
+    }
+  }catch(e){ console.error(e); }
+  finally{ gridLoading = false; }
+}
+function loadMore(){ loadTicketsPage(gridPage, false); }
+
+// ====================================================
+// RENDER GRID with FILTER
+// ====================================================
+function renderGrid(){
+  const grid = document.getElementById('ticketGrid');
+  if(!grid) return;
+
+  let nums = Object.keys(ticketsData).map(Number).sort((a,b)=>a-b);
+
+  if(currentFilter === 'available'){
+    nums = nums.filter(n => (ticketsData[n]?.status || 'available') === 'available');
+  } else if(currentFilter === 'sold'){
+    nums = nums.filter(n => ticketsData[n]?.status === 'sold');
+  } else if(currentFilter === 'selected'){
+    nums = nums.filter(n => selectedNumbers.includes(n));
+  }
+
+  if(nums.length === 0){
+    grid.innerHTML = `<div class="empty-grid">${t('noMatch')}</div>`;
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  nums.forEach(i=>{
+    const s = ticketsData[i]?.status || 'available';
+    const el = document.createElement('div');
+    el.className = `ticket-num ${s}${selectedNumbers.includes(i)?' selected':''}`;
+    el.textContent = i;
+    el.dataset.num = i;
+    el.onclick = ()=>toggleSelect(i, s);
+    frag.appendChild(el);
+  });
+  grid.innerHTML = '';
+  grid.appendChild(frag);
+}
+
+function filterGrid(el, filter){
+  document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  currentFilter = filter;
+  renderGrid();
+}
+
+function toggleSelect(num, status){
+  if(status !== 'available') return;
+  if(tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+  const idx = selectedNumbers.indexOf(num);
+  if(idx >= 0){
+    selectedNumbers.splice(idx, 1);
+  } else {
+    if(selectedNumbers.length >= MAX_PER_ORDER){
+      showToast('⚠️ ' + t('maxTickets', {n: MAX_PER_ORDER}));
+      return;
+    }
+    selectedNumbers.push(num);
+  }
+  renderGrid();
+  updateCTA();
+  updatePricing();
+}
+
+async function updatePricing(){
+  if(selectedNumbers.length === 0){ currentPricing = { total: 0, discount: 0 }; return; }
+  try{
+    const r = await fetch(`${API_BASE}/api/pricing`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ quantity: selectedNumbers.length })
+    });
+    const d = await r.json();
+    if(d.success) currentPricing = d.pricing;
+  }catch(e){
+    const n = selectedNumbers.length;
+    const base = n * BASE_PRICE;
+    let disc = 0;
+    for(const tier of PRICING_TIERS){
+      if(n >= tier.min_qty){ disc = tier.discount; break; }
+    }
+    currentPricing = { total: base - disc, discount: disc };
+  }
+}
+
+function updateCTA(){
+  const c = selectedNumbers.length;
+  document.getElementById('ctaCount').textContent = c;
+  document.getElementById('continueBtn').disabled = c === 0;
+  document.getElementById('selectHint').textContent = `${c} / ${MAX_PER_ORDER}`;
+}
+
+// ====================================================
+// SEARCH
+// ====================================================
+async function searchTicket(){
+  const val = parseInt(document.getElementById('searchInput').value);
+  if(!val || val < 1 || val > TOTAL_TICKETS){
+    showToast('⚠️ 1 - ' + TOTAL_TICKETS); return;
+  }
+  try{
+    const r = await fetch(`${API_BASE}/api/tickets/search?number=${val}`);
+    const d = await r.json();
+    if(!d.success){ showToast('❌ ' + (d.message||'')); return; }
+    ticketsData[val] = d.ticket;
+    currentFilter = 'all';
+    document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active'));
+    document.querySelector('.filter-chip[data-filter="all"]')?.classList.add('active');
+    renderGrid();
+    setTimeout(()=>{
+      const el = document.querySelector(`.ticket-num[data-num="${val}"]`);
+      if(el){
+        el.scrollIntoView({behavior:'smooth', block:'center'});
+        el.classList.add('highlight');
+        setTimeout(()=>el.classList.remove('highlight'), 3000);
+      }
+    }, 100);
+    if(d.ticket.status === 'available' && !selectedNumbers.includes(val)){
+      toggleSelect(val, 'available');
+    }
+  }catch(e){ showToast('❌ Error'); }
+}
+
+// ====================================================
+// AUTO PICK
+// ====================================================
+async function autoPickRandomTickets(){
+  try{
+    const r = await fetch(`${API_BASE}/api/tickets/list?page=1&per_page=500&filter=available`);
+    const d = await r.json();
+    if(!d.success || Object.keys(d.tickets).length === 0){
+      showToast('⚠️ '); return;
+    }
+    const all = Object.keys(d.tickets).map(Number);
+    for(let i=all.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [all[i], all[j]] = [all[j], all[i]];
+    }
+    selectedNumbers = all.slice(0, 5);
+    await loadTicketsPage(0, true);
+    renderGrid();
+    updateCTA();
+    updatePricing();
+  }catch(e){}
+}
+
+// ====================================================
+// HOME STATS
+// ====================================================
+async function loadHomeStats(){
+  try{
+    const r = await fetch(`${API_BASE}/api/tickets/summary`);
+    const d = await r.json();
+    document.getElementById('soldCount').textContent = (d.sold||0).toLocaleString();
+    document.getElementById('availCount').textContent = (d.available||0).toLocaleString();
+    const pct = d.sold_pct || 0;
+    document.getElementById('pctText').textContent = pct + '%';
+
+    const bar = document.getElementById('progressBar');
+    bar.style.width = pct + '%';
+    bar.classList.remove('warning','critical');
+    if(pct >= 90) bar.classList.add('critical');
+    else if(pct >= 70) bar.classList.add('warning');
+  }catch(e){}
+}
+
+// ====================================================
+// RESERVATION TIMER
+// ====================================================
+function startReservationTimer(expiresAtIso){
+  reservationExpiresAt = new Date(expiresAtIso).getTime();
+  if(reservationTimer) clearInterval(reservationTimer);
+  reservationTimer = setInterval(()=>{
+    const remaining = reservationExpiresAt - Date.now();
+    if(remaining <= 0){
+      document.getElementById('reservationBar').classList.remove('show');
+      clearInterval(reservationTimer);
+      showToast('⏰ ' + t('expired'));
+      selectedNumbers = [];
+      updateCTA();
+      loadTicketsPage(0, true);
+      return;
+    }
+    updateReservationBar();
+  }, 1000);
+  updateReservationBar();
+}
+
+function updateReservationBar(){
+  const bar = document.getElementById('reservationBar');
+  if(!reservationExpiresAt){ bar.classList.remove('show'); return; }
+  const remaining = reservationExpiresAt - Date.now();
+  if(remaining <= 0){ bar.classList.remove('show'); return; }
+  const m = Math.floor(remaining/60000);
+  const s = Math.floor((remaining%60000)/1000);
+  bar.textContent = `⏱️ ${t('reservedFor')} ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  bar.classList.add('show');
+}
+
+// ====================================================
+// CHECKOUT
+// ====================================================
+async function openCheckout(){
+  const userId = telegramUser?.id;
+  if(!userId){ showToast('⚠️ ' + t('pleaseEnter')); return; }
+  try{
+    const r = await fetch(`${API_BASE}/api/reserve-tickets`,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'X-Telegram-Init-Data': tg.initData||''
+      },
+      body:JSON.stringify({
+        numbers: selectedNumbers,
+        user_id: userId,
+        initData: tg.initData||''
+      })
+    });
+    const d = await r.json();
+    if(!d.success){ showToast('❌ '+(d.message||'')); return; }
+    if(d.expires_at) startReservationTimer(d.expires_at);
+  }catch(e){ showToast('❌ Server error'); return; }
+
+  switchTab('checkoutPage');
+  goStep(1);
+  await updatePricing();
+
+  document.getElementById('s1Count').textContent = selectedNumbers.length;
+  document.getElementById('s1Nums').innerHTML = selectedNumbers
+    .map(n => `<span class="badge-num">#${n}</span>`).join('');
+  document.getElementById('s1Total').textContent = currentPricing.total.toLocaleString() + ' ብር';
+  if(currentPricing.discount > 0){
+    document.getElementById('discountRow').style.display = 'flex';
+    document.getElementById('s1Discount').textContent = '-' + currentPricing.discount.toLocaleString() + ' ብር';
+  } else {
+    document.getElementById('discountRow').style.display = 'none';
+  }
+  if(userFetchedName) document.getElementById('inputName').value = userFetchedName;
+  if(userFetchedPhone) document.getElementById('inputPhone').value = userFetchedPhone;
+}
+
+function goStep(n){
+  document.getElementById('step1').style.display = n===1?'block':'none';
+  document.getElementById('step2').style.display = n===2?'block':'none';
+  document.getElementById('step3').style.display = n===3?'block':'none';
+  ['seg1','seg2','seg3'].forEach((id,i)=>document.getElementById(id).classList.toggle('active', i<n));
+  document.getElementById('stepLabel').textContent = `${n} / 3`;
+
+  if(n===2){
+    const nm = document.getElementById('inputName').value.trim();
+    const ph = document.getElementById('inputPhone').value.trim().replace(/\s/g, '');
+    if(!nm || !ph){ showToast('⚠️ ' + t('pleaseEnter')); goStep(1); return; }
+    if(!/^(09|07|\+2519|\+2517)\d{7,8}$/.test(ph)){
+      showToast('⚠️ Phone: 09xxxxxxxx'); goStep(1); return;
+    }
+    userFetchedName = nm; userFetchedPhone = ph;
+    document.getElementById('s2Name').textContent = nm;
+    document.getElementById('s2Phone').textContent = ph;
+    document.getElementById('s2Count').textContent = selectedNumbers.length;
+    document.getElementById('s2Total').textContent = currentPricing.total.toLocaleString() + ' ብር';
+  }
+  if(n===3){
+    if(!receiptBase64){ showToast('⚠️ ' + t('uploadReceipt')); goStep(2); return; }
+    document.getElementById('s3Name').textContent = userFetchedName;
+    document.getElementById('s3Count').textContent = `${selectedNumbers.length} × ${BASE_PRICE.toLocaleString()}`;
+    document.getElementById('s3Nums').innerHTML = selectedNumbers
+      .map(n => `<span class="badge-num">#${n}</span>`).join('');
+    document.getElementById('s3Phone').textContent = userFetchedPhone;
+    document.getElementById('s3Total').textContent = currentPricing.total.toLocaleString() + ' ብር';
+  }
+  window.scrollTo(0,0);
+}
+
+// ====================================================
+// RECEIPT UPLOAD
+// ====================================================
+function processReceipt(e){
+  const f = e.target.files[0];
+  if(!f) return;
+  if(f.size > 5*1024*1024){ showToast('⚠️ Max 5MB'); return; }
+  const r = new FileReader();
+  r.onload = ev=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const c = document.createElement('canvas');
+      let w=img.width, h=img.height, max=1000;
+      if(w>h && w>max){ h*=max/w; w=max; }
+      else if(h>max){ w*=max/h; h=max; }
+      c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      receiptBase64 = c.toDataURL('image/jpeg',0.7);
+      document.getElementById('receiptBox').classList.add('has-file');
+      document.getElementById('receiptText').textContent = '✅ ' + t('copied');
+    };
+    img.src = ev.target.result;
+  };
+  r.readAsDataURL(f);
+}
+
+// ====================================================
+// SUBMIT ORDER
+// ====================================================
+async function submitOrder(){
+  if(!receiptBase64){ showToast('⚠️ ' + t('uploadReceipt')); return; }
+  const btn = document.getElementById('payBtn');
+  btn.disabled = true;
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+
+  const payload = {
+    initData: tg.initData||'',
+    numbers: selectedNumbers,
+    user_id: telegramUser?.id,
+    user_name: userFetchedName,
+    user_phone: userFetchedPhone,
+    receipt_base64: receiptBase64
+  };
+
+  try{
+    const r = await fetch(`${API_BASE}/api/submit-order`,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'X-Telegram-Init-Data': tg.initData||''
+      },
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if(r.ok && d.success){
+      document.getElementById('successOrderId').textContent = d.order_id;
+      document.getElementById('cardOrderId').textContent = 'Order: ' + d.order_id;
+      document.getElementById('cardTicketNums').textContent = selectedNumbers.join(', ');
+      try{ confetti({particleCount:120, spread:70, origin:{y:.6}}); }catch(e){}
+      document.getElementById('successModal').classList.add('show');
+
+      selectedNumbers = [];
+      receiptBase64 = null;
+      reservationExpiresAt = null;
+      document.getElementById('reservationBar').classList.remove('show');
+      document.getElementById('receiptBox').classList.remove('has-file');
+      document.getElementById('receiptText').textContent = t('uploadReceipt');
+      document.getElementById('receiptInput').value = '';
+      loadHomeStats();
+      loadTicketsPage(0, true);
+      updateCTA();
+    } else {
+      showToast('❌ ' + (d.message||''));
+    }
+  }catch(e){
+    showToast('❌ Server error');
+  }finally{
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
+function closeSuccessModal(){
+  document.getElementById('successModal').classList.remove('show');
+  switchTab('homePage');
+}
+
+// ====================================================
+// USER / PROFILE
+// ====================================================
+async function fetchUserInfo(uid){
+  try{
+    const r = await fetch(`${API_BASE}/api/get-user-info?user_id=${uid}`,{
+      headers:{'X-Telegram-Init-Data': tg.initData||''}
+    });
+    const d = await r.json();
+    if(d.success){
+      userFetchedPhone = d.phone || '';
+      userFetchedName = d.name || telegramUser?.first_name || '';
+      userIsAdmin = d.is_admin || false;
+      document.getElementById('profName').textContent = userFetchedName || '-';
+      document.getElementById('profPhone').textContent = userFetchedPhone || '-';
+      if(userIsAdmin){
+        document.getElementById('adminSection').style.display = 'block';
+        loadAdmin();
+      }
+    }
+  }catch(e){}
+}
+
+async function fetchMyTickets(){
+  const uid = telegramUser?.id;
+  if(!uid) return;
+  const div = document.getElementById('myTicketsList');
+  try{
+    const r = await fetch(`${API_BASE}/api/my-tickets?user_id=${uid}`,{
+      headers:{'X-Telegram-Init-Data': tg.initData||''}
+    });
+    const d = await r.json();
+
+    document.getElementById('statActive').textContent = d.filter(tk=>tk.status==='sold'||tk.status==='reserved').length;
+    document.getElementById('statPending').textContent = d.filter(tk=>tk.status==='pending').length;
+    document.getElementById('statTotal').textContent = d.length;
+
+    if(!d.length){
+      div.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon"><i class="fa-solid fa-ticket"></i></div>
+          <h3>${t('noTickets')}</h3>
+          <p>${t('noTicketsDesc')}</p>
+          <button class="btn-primary" onclick="switchTab('homePage')" style="padding:12px 24px">
+            ${t('buyNow')}
+          </button>
+        </div>`;
+      return;
+    }
+    div.innerHTML = d.map(tk=>`
+      <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <b>#${tk.number}</b>
+          <div style="font-size:11px;color:var(--sub)">
+            ${tk.status==='sold'?'✅ '+t('sold'):tk.status==='pending'?'🟡 '+t('pendingStat'):tk.status==='reserved'?'🔵 '+t('reservedFor'):''}
+          </div>
+        </div>
+        <div style="color:var(--yellow);font-weight:800">${tk.price_paid||BASE_PRICE} ብር</div>
+      </div>
+    `).join('');
+  }catch(e){
+    div.innerHTML = '<p style="color:var(--red);text-align:center;padding:16px">Error</p>';
+  }
+}
+
+async function fetchReferralStats(){
+  const uid = telegramUser?.id;
+  if(!uid) return;
+  try{
+    const r = await fetch(`${API_BASE}/api/referral-stats?user_id=${uid}`,{
+      headers:{'X-Telegram-Init-Data': tg.initData||''}
+    });
+    const d = await r.json();
+    if(d.success){
+      document.getElementById('refTotalUsers').textContent = d.stats.total_referred||0;
+      document.getElementById('refBoughtUsers').textContent = d.stats.successful_purchases||0;
+    }
+  }catch(e){}
+}
+
+// ====================================================
+// ADMIN
+// ====================================================
+async function loadAdmin(){
+  try{
+    const r = await fetch(`${API_BASE}/api/admin/analytics`,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'X-Telegram-Init-Data': tg.initData||'',
+        'X-User-Id': telegramUser?.id?.toString()||''
+      },
+      body: JSON.stringify({user_id: telegramUser?.id?.toString()})
+    });
+    const d = await r.json();
+    if(d.error) return;
+    document.getElementById('totalRevenueStat').textContent = (d.total_revenue||0).toLocaleString();
+    document.getElementById('pendingCountStat').textContent = d.pending_count||0;
+  }catch(e){}
+}
+
+async function adminUpdateTicketStatus(){
+  const nums = document.getElementById('adminTicketNumbers').value
+    .split(',').map(n=>parseInt(n.trim())).filter(n=>!isNaN(n));
+  const status = document.getElementById('adminStatusSelect').value;
+  if(!nums.length){ showToast('⚠️'); return; }
+  try{
+    const r = await fetch(`${API_BASE}/api/admin/update-ticket-status`,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'X-Telegram-Init-Data': tg.initData||'',
+        'X-User-Id': telegramUser?.id?.toString()||''
+      },
+      body: JSON.stringify({
+        user_id: telegramUser?.id?.toString(),
+        ticket_numbers: nums, status
+      })
+    });
+    const d = await r.json();
+    showToast(d.success ? '✅ ' + d.message : '❌ ' + (d.error||''));
+    loadTicketsPage(0, true);
+  }catch(e){ showToast('❌ Error'); }
+}
+
+async function sendBroadcastMessage(){
+  const msg = document.getElementById('broadcastMsgInput').value.trim();
+  if(!msg){ showToast('⚠️'); return; }
+  try{
+    const r = await fetch(`${API_BASE}/api/admin/broadcast`,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'X-Telegram-Init-Data': tg.initData||'',
+        'X-User-Id': telegramUser?.id?.toString()||''
+      },
+      body: JSON.stringify({user_id: telegramUser?.id?.toString(), message: msg})
+    });
+    const d = await r.json();
+    showToast(d.success ? '✅ ' + d.message : '❌ ' + (d.error||''));
+    document.getElementById('broadcastMsgInput').value = '';
+  }catch(e){ showToast('❌ Error'); }
+}
+
+// ====================================================
+// SSE
+// ====================================================
+let eventSource = null;
+function startStream(){
+  if(typeof EventSource === 'undefined') return;
+  try{
+    if(eventSource) eventSource.close();
+    eventSource = new EventSource(`${API_BASE}/api/stream`);
+    eventSource.onmessage = (e)=>{
+      try{
+        const data = JSON.parse(e.data);
+        if(data.type === 'UPDATE_NUMBERS'){
+          data.numbers.forEach(n=>{
+            if(ticketsData[n]) ticketsData[n].status = data.status;
+            else ticketsData[n] = { status: data.status };
+          });
+          renderGrid();
+          loadHomeStats();
+        }
+      }catch(err){}
+    };
+    eventSource.onerror = ()=>{
+      if(eventSource){ eventSource.close(); eventSource = null; }
+      setTimeout(startStream, 5000);
+    };
+  }catch(e){}
+}
+
+// ====================================================
+// INIT
+// ====================================================
+async function init(){
+  if(localStorage.getItem('theme') === 'light'){
+    document.body.classList.add('light');
+    document.getElementById('themeIcon').className = 'fa-solid fa-moon';
+  }
+  document.getElementById('langSelect').value = currentLang;
+  applyTranslations();
+
+  try{
+    const r = await fetch(`${API_BASE}/api/config`);
+    const c = await r.json();
+    TOTAL_TICKETS = c.ticket_count || 3500;
+    BASE_PRICE = c.ticket_price || 3500;
+    MAX_PER_ORDER = c.max_per_order || 20;
+    RESERVATION_MIN = c.reservation_minutes || 15;
+    PRICING_TIERS = c.pricing_tiers || [];
+    startCountdown(new Date(c.draw_end_at).getTime());
+  }catch(e){
+    startCountdown(Date.now() + 30*86400000);
+  }
+
+  if(tg.initDataUnsafe?.user){
+    telegramUser = tg.initDataUnsafe.user;
+    fetchUserInfo(telegramUser.id);
+    fetchMyTickets();
+    fetchReferralStats();
+  }
+
+  await loadHomeStats();
+  await loadTicketsPage(0, true);
+  updateCTA();
+  startStream();
+  updateReservationBar();
+}
+
+window.addEventListener('online', ()=>{
+  document.getElementById('offlineScreen').style.display = 'none';
+  loadHomeStats();
+});
+window.addEventListener('offline', ()=>{
+  document.getElementById('offlineScreen').style.display = 'flex';
+});
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden) loadHomeStats();
+});
+
+init();
+setInterval(loadHomeStats, 30000);
+</script>
+</body>
+</html>
