@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import base64
 import hmac
@@ -11,7 +12,6 @@ import random
 import csv
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
-from logging.handlers import RotatingFileHandler
 from urllib.parse import parse_qsl
 
 import requests
@@ -22,14 +22,15 @@ from flask_limiter.util import get_remote_address
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
-from apscheduler.schedulers.background import BackgroundScheduler
 
-# ==================== LOGGING ====================
-log_handler = RotatingFileHandler('app.log', maxBytes=5*1024*1024, backupCount=3)
-log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+# ==================== LOGGING (Vercel-safe: only stdout) ====================
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-logger.addHandler(log_handler)
+if logger.handlers:
+    logger.handlers.clear()
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(_handler)
 
 # ==================== CONFIG ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -37,23 +38,23 @@ ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "*")
 DRAW_END_AT = os.environ.get("DRAW_END_AT")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin2024")
+IS_VERCEL = os.environ.get("VERCEL") == "1"
 
 ADMIN_IDS = [a.strip() for a in os.environ.get("ADMIN_IDS", "8982566651").split(",") if a.strip()]
 
-# ==================== PRICING (Single source of truth) ====================
+# ==================== PRICING ====================
 TOTAL_TICKETS = 3500
 BASE_PRICE = 3500
 MAX_TICKETS_PER_ORDER = 20
 RESERVATION_TIMEOUT_MINUTES = 15
 
-# Volume discounts
 PRICING_TIERS = [
     {"min_qty": 5, "discount": 1500},
     {"min_qty": 3, "discount": 500},
 ]
 
 def calculate_total_price(ticket_count):
-    """Backend-only price calculation. Frontend mirrors this for display only."""
     if ticket_count <= 0:
         return 0
     total = ticket_count * BASE_PRICE
@@ -64,7 +65,6 @@ def calculate_total_price(ticket_count):
     return max(total, 0)
 
 def get_pricing_info(ticket_count):
-    """Returns detailed pricing info for a given quantity."""
     if ticket_count <= 0:
         return {"total": 0, "unit": BASE_PRICE, "discount": 0, "base_total": 0}
     base_total = ticket_count * BASE_PRICE
@@ -76,7 +76,7 @@ def get_pricing_info(ticket_count):
         "unit": round(total / ticket_count, 2)
     }
 
-# ==================== DEFAULT SETTINGS (fallback when DB missing) ====================
+# ==================== DEFAULT SETTINGS ====================
 DEFAULT_SETTINGS = {
     "product_name": "BYD Sealion 6",
     "subtitle": "Shark Grey",
@@ -91,19 +91,20 @@ DEFAULT_SETTINGS = {
     "telebirr_name": "Getachew",
     "cbe_number": "1000528139489",
     "cbe_name": "Getachew Fikadu Jirata",
+    "draw_title": "BYD Sealion 6 Giveaway",
 }
 
 # ==================== APP SETUP ====================
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB (settings image)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 allowed_origins = ["*"] if WEB_APP_URL == "*" else [WEB_APP_URL]
-CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
+CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
 
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["500 per day", "200 per hour"],
+    default_limits=["1000 per day", "500 per hour"],
     storage_uri="memory://"
 )
 
@@ -130,20 +131,6 @@ def get_db_connection():
 def release_db_connection(conn):
     if db_pool and conn:
         db_pool.putconn(conn)
-
-# ==================== SSE ====================
-sse_clients = []
-
-def notify_clients(event_data):
-    dead = []
-    for q in sse_clients:
-        try:
-            q.append(event_data)
-        except Exception:
-            dead.append(q)
-    for dc in dead:
-        if dc in sse_clients:
-            sse_clients.remove(dc)
 
 # ==================== AUTH ====================
 def verify_telegram_data(init_data: str) -> bool:
@@ -183,7 +170,15 @@ def require_verified_user(req, supplied_user_id=None):
         return None
     return verified
 
+def _expected_admin_token():
+    return hashlib.sha256(f"{ADMIN_PASSWORD}:{BOT_TOKEN or 'salt'}".encode()).hexdigest()
+
 def is_authorized_admin(req):
+    # 1) Password token
+    token = req.headers.get('X-Admin-Token')
+    if token and hmac.compare_digest(token, _expected_admin_token()):
+        return True
+    # 2) Telegram admin ID
     json_data = req.get_json(silent=True) or {}
     user_id = req.headers.get('X-User-Id') or json_data.get('user_id') or req.args.get('user_id')
     if user_id and str(user_id) in ADMIN_IDS:
@@ -391,7 +386,6 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_order_id ON tickets(order_id);")
 
-        # Seed tickets if empty
         cur.execute("SELECT COUNT(*) AS count FROM tickets;")
         count = cur.fetchone()['count']
         total = get_int_setting("total_tickets", TOTAL_TICKETS)
@@ -402,7 +396,6 @@ def init_db():
                 data
             )
 
-        # Seed admins
         for aid in ADMIN_IDS:
             cur.execute(
                 "INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE) "
@@ -410,7 +403,6 @@ def init_db():
                 (aid,)
             )
 
-        # Seed default settings (only if missing)
         for k, v in DEFAULT_SETTINGS.items():
             cur.execute(
                 "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
@@ -425,17 +417,16 @@ def init_db():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== CLEANUP ====================
+# ==================== CLEANUP (manual + optional scheduler) ====================
 def cleanup_expired_pendings():
     if not DATABASE_URL:
-        return
+        return 0
     conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         timeout_min = get_int_setting("reservation_minutes", RESERVATION_TIMEOUT_MINUTES)
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_min)
-        # COALESCE: reserved_at NULL ሲሆን updated_at ይጠቀማል
         cur.execute("""
             UPDATE tickets
             SET status='available', user_id=NULL, user_name=NULL, user_phone=NULL,
@@ -447,20 +438,33 @@ def cleanup_expired_pendings():
         """, (cutoff,))
         released = [r['number'] for r in cur.fetchall()]
         conn.commit()
-        if released:
-            notify_clients({"type": "UPDATE_NUMBERS", "numbers": released, "status": "available"})
-            logger.info(f"Released {len(released)} expired tickets")
         cur.close()
+        if released:
+            logger.info(f"Released {len(released)} expired tickets")
+        return len(released)
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
+        return 0
     finally:
         if conn: release_db_connection(conn)
 
-scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(cleanup_expired_pendings, 'interval', minutes=1)
-scheduler.start()
+# Only run scheduler if NOT on Vercel
+if not IS_VERCEL:
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        scheduler = BackgroundScheduler(daemon=True)
+        scheduler.add_job(cleanup_expired_pendings, 'interval', minutes=1)
+        scheduler.start()
+        logger.info("✅ Scheduler started")
+    except Exception as e:
+        logger.warning(f"Scheduler not started: {e}")
 
 init_db()
+
+# ==================== FAVICON ====================
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
 
 # ==================== API: CONFIG (public) ====================
 @app.route('/api/config', methods=['GET'])
@@ -482,6 +486,7 @@ def public_config():
         "product_name": s.get("product_name"),
         "subtitle": s.get("subtitle"),
         "image_url": s.get("image_url"),
+        "draw_title": s.get("draw_title"),
         "telebirr_number": s.get("telebirr_number"),
         "telebirr_name": s.get("telebirr_name"),
         "cbe_number": s.get("cbe_number"),
@@ -492,10 +497,33 @@ def public_config():
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
+# ==================== CRON: cleanup ====================
+@app.route('/api/cron/cleanup', methods=['GET', 'POST'])
+def cron_cleanup():
+    secret = request.args.get('secret') or (request.get_json(silent=True) or {}).get('secret')
+    if secret != (os.environ.get("CRON_SECRET") or "cleanup"):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+    n = cleanup_expired_pendings()
+    return jsonify({"success": True, "released": n})
+
+# ==================== ADMIN: VERIFY PASSWORD ====================
+@app.route('/api/admin/verify-password', methods=['POST'])
+@limiter.limit("10 per minute")
+def verify_admin_password():
+    data = request.get_json(silent=True) or {}
+    pwd = data.get('password', '')
+    if not pwd:
+        return jsonify({"success": False, "error": "Password required"}), 400
+    if hmac.compare_digest(pwd, ADMIN_PASSWORD):
+        return jsonify({
+            "success": True,
+            "token": _expected_admin_token()
+        })
+    return jsonify({"success": False, "error": "የተሳሳተ የይለፍ ቃል"}), 401
+
 # ==================== API: SUMMARY ====================
 @app.route('/api/tickets/summary', methods=['GET'])
 def tickets_summary():
-    """Lightweight summary — no 3500 records!"""
     total = get_int_setting("total_tickets", TOTAL_TICKETS)
     conn = None
     try:
@@ -527,10 +555,9 @@ def tickets_summary():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== API: PAGINATED LIST ====================
+# ==================== API: LIST ====================
 @app.route('/api/tickets/list', methods=['GET'])
 def tickets_list():
-    """Paginated ticket list."""
     try:
         page = max(1, int(request.args.get('page', 1)))
         per_page = min(500, max(20, int(request.args.get('per_page', 100))))
@@ -554,11 +581,8 @@ def tickets_list():
 
         tickets = {r['number']: {"status": r['status']} for r in rows}
         res = jsonify({
-            "success": True,
-            "page": page,
-            "per_page": per_page,
-            "tickets": tickets,
-            "has_more": len(rows) == per_page
+            "success": True, "page": page, "per_page": per_page,
+            "tickets": tickets, "has_more": len(rows) == per_page
         })
         res.headers['Cache-Control'] = 'public, max-age=10'
         return res
@@ -571,13 +595,11 @@ def tickets_list():
 # ==================== API: SEARCH ====================
 @app.route('/api/tickets/search', methods=['GET'])
 def tickets_search():
-    """Search for a specific ticket number."""
     try:
         number = int(request.args.get('number', 0))
         total = get_int_setting("total_tickets", TOTAL_TICKETS)
         if number < 1 or number > total:
             return jsonify({"success": False, "message": "የተሳሳተ ቁጥር"}), 400
-
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT number, status FROM tickets WHERE number = %s", (number,))
@@ -591,51 +613,19 @@ def tickets_search():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== API: RANGE ====================
-@app.route('/api/tickets/range', methods=['GET'])
-def tickets_range():
-    """Get tickets in a numeric range. Efficient for lazy loading."""
-    try:
-        total = get_int_setting("total_tickets", TOTAL_TICKETS)
-        start = max(1, int(request.args.get('start', 1)))
-        end = min(total, int(request.args.get('end', 100)))
-        if end < start:
-            return jsonify({"success": False}), 400
-        if end - start > 500:
-            end = start + 500
-
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT number, status FROM tickets WHERE number BETWEEN %s AND %s ORDER BY number",
-            (start, end)
-        )
-        rows = cur.fetchall()
-        cur.close()
-        tickets = {r['number']: {"status": r['status']} for r in rows}
-        return jsonify({"success": True, "tickets": tickets})
-    except Exception as e:
-        return jsonify({"success": False, "tickets": {}}), 500
-    finally:
-        if conn: release_db_connection(conn)
-
 # ==================== API: PRICING ====================
 @app.route('/api/pricing', methods=['POST'])
 def pricing_api():
-    """Backend is source of truth for pricing."""
     data = request.get_json(silent=True) or {}
     qty = int(data.get('quantity', 0))
     max_order = get_int_setting("max_per_order", MAX_TICKETS_PER_ORDER)
     if qty < 0 or qty > max_order:
         return jsonify({"success": False, "message": "የተሳሳተ ብዛት"}), 400
-
-    # Dynamic pricing from settings
     try:
         tiers = json.loads(get_setting("pricing_tiers", json.dumps(PRICING_TIERS)) or "[]")
     except Exception:
         tiers = PRICING_TIERS
     base_price = get_int_setting("base_price", BASE_PRICE)
-
     if qty <= 0:
         return jsonify({"success": True, "pricing": {"total": 0, "unit": base_price, "discount": 0, "base_total": 0}})
     base_total = qty * base_price
@@ -667,10 +657,7 @@ def reserve_tickets():
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT number, status FROM tickets WHERE number = ANY(%s) FOR UPDATE",
-            (numbers,)
-        )
+        cur.execute("SELECT number, status FROM tickets WHERE number = ANY(%s) FOR UPDATE", (numbers,))
         rows = cur.fetchall()
         if len(rows) != len(set(numbers)) or any(r['status'] != 'available' for r in rows):
             conn.rollback()
@@ -684,7 +671,6 @@ def reserve_tickets():
         conn.commit()
         cur.close()
 
-        notify_clients({"type": "UPDATE_NUMBERS", "numbers": numbers, "status": "reserved"})
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=RESERVATION_TIMEOUT_MINUTES)).isoformat()
         return jsonify({
             "success": True,
@@ -718,7 +704,6 @@ def submit_order():
     if invalid:
         return jsonify({"success": False, "message": "የተሳሳተ ቁጥር"}), 400
 
-    # Dynamic price calc
     base_price = get_int_setting("base_price", BASE_PRICE)
     try:
         tiers = json.loads(get_setting("pricing_tiers", json.dumps(PRICING_TIERS)) or "[]")
@@ -767,7 +752,6 @@ def submit_order():
         conn.commit()
         cur.close()
 
-        notify_clients({"type": "UPDATE_NUMBERS", "numbers": selected, "status": "pending"})
         return jsonify({
             "success": True,
             "message": "ትዕዛዝዎ ተልኳል",
@@ -803,8 +787,7 @@ def get_my_tickets():
         for r in rows:
             if r['status'] == 'reserved' and r['reserved_at']:
                 elapsed = (now - r['reserved_at'].replace(tzinfo=timezone.utc)).total_seconds()
-                remaining = max(0, timeout_min * 60 - elapsed)
-                r['expires_in_seconds'] = int(remaining)
+                r['expires_in_seconds'] = int(max(0, timeout_min * 60 - elapsed))
             else:
                 r['expires_in_seconds'] = None
             r['updated_at'] = r['updated_at'].isoformat() if r['updated_at'] else None
@@ -881,27 +864,6 @@ def get_winners():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== SSE STREAM ====================
-@app.route('/api/stream')
-def stream():
-    def event_stream():
-        q = []
-        sse_clients.append(q)
-        last_ping = time.time()
-        try:
-            while True:
-                if q:
-                    data = q.pop(0)
-                    yield f"data: {json.dumps(data)}\n\n"
-                if time.time() - last_ping > 15:
-                    yield ": ping\n\n"
-                    last_ping = time.time()
-                time.sleep(1)
-        except GeneratorExit:
-            if q in sse_clients:
-                sse_clients.remove(q)
-    return Response(event_stream(), content_type='text/event-stream')
-
 # ==================== BOT WEBHOOK ====================
 @app.route('/bot/webhook', methods=['POST'])
 def bot_webhook_handler():
@@ -972,7 +934,6 @@ def bot_webhook_handler():
                 if conn: release_db_connection(conn)
         return jsonify({"status": "ok"}), 200
 
-    # Callback queries
     cb = data.get('callback_query')
     if not cb:
         return jsonify({"status": "ok"}), 200
@@ -1012,7 +973,6 @@ def bot_webhook_handler():
                 ns, msg = 'available', f"❌ #{order_id} ተሰርዟል"
                 push = f"❌ ትዕዛዝዎ #{order_id} ተሰርዟል"
             conn.commit()
-            notify_clients({"type": "UPDATE_NUMBERS", "numbers": nums, "status": ns})
             send_telegram_push(target, push)
             log_audit_action(from_id, f"CALLBACK_{action.upper()}", f"Order {order_id}")
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
@@ -1037,16 +997,13 @@ def admin_settings():
         except Exception:
             s['pricing_tiers'] = PRICING_TIERS
         for k in ('base_price', 'total_tickets', 'max_per_order', 'reservation_minutes'):
-            try:
-                s[k] = int(s[k])
-            except Exception:
-                pass
+            try: s[k] = int(s[k])
+            except Exception: pass
         return jsonify({"success": True, "settings": s})
 
-    # POST
     data = request.get_json(silent=True) or {}
     allowed = [
-        "product_name", "subtitle", "image_url", "draw_end_at",
+        "product_name", "subtitle", "image_url", "draw_end_at", "draw_title",
         "base_price", "total_tickets", "max_per_order", "reservation_minutes",
         "pricing_tiers", "telebirr_number", "telebirr_name", "cbe_number", "cbe_name"
     ]
@@ -1130,7 +1087,6 @@ def admin_approve_order():
         cur.execute("UPDATE tickets SET status='sold', updated_at=CURRENT_TIMESTAMP WHERE order_id=%s", (order_id,))
         conn.commit()
         cur.close()
-        notify_clients({"type": "UPDATE_NUMBERS", "numbers": nums, "status": "sold"})
         send_telegram_push(target, f"🎉 ትዕዛዝዎ #{order_id} ፀድቋል! ቁጥሮች: {nums}")
         log_audit_action(data.get('user_id', 'Admin'), "APPROVE_ORDER", order_id)
         return jsonify({"success": True})
@@ -1167,7 +1123,6 @@ def admin_reject_order():
         """, (order_id,))
         conn.commit()
         cur.close()
-        notify_clients({"type": "UPDATE_NUMBERS", "numbers": nums, "status": "available"})
         send_telegram_push(target, f"❌ ትዕዛዝዎ #{order_id} ተሰርዟል")
         log_audit_action(data.get('user_id', 'Admin'), "REJECT_ORDER", order_id)
         return jsonify({"success": True})
@@ -1195,12 +1150,6 @@ def admin_analytics():
             FROM tickets
         """)
         stats = cur.fetchone()
-        cur.execute("""
-            SELECT DATE(updated_at) AS date, COUNT(*) AS count, SUM(price_paid) AS revenue
-            FROM tickets WHERE status='sold'
-            GROUP BY DATE(updated_at) ORDER BY DATE(updated_at) DESC LIMIT 7
-        """)
-        stats['daily_trend'] = cur.fetchall()
         cur.close()
         return jsonify(stats)
     except Exception as e:
@@ -1233,7 +1182,7 @@ def broadcast_message():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== ADMIN: EXPORT ORDERS ====================
+# ==================== ADMIN: EXPORT ====================
 @app.route('/api/admin/export-orders', methods=['GET'])
 def export_orders():
     if not is_authorized_admin(request):
@@ -1288,14 +1237,12 @@ def update_ticket_status():
         log_audit_action(data.get('user_id', 'Admin'), "UPDATE_STATUS", f"{nums} → {new_status}")
         if new_status == 'sold':
             push = f"🎉 ትዕዛዝዎ ፀድቋል! ቁጥሮች: {nums}"
-        elif new_status == 'available':
-            push = f"⚠️ ቁጥሮችዎ {nums} ተሰርዘዋል"
-        else:
-            push = None
-        if push:
             for uid in uids:
                 send_telegram_push(uid, push)
-        notify_clients({"type": "UPDATE_NUMBERS", "numbers": nums, "status": new_status})
+        elif new_status == 'available':
+            push = f"⚠️ ቁጥሮችዎ {nums} ተሰርዘዋል"
+            for uid in uids:
+                send_telegram_push(uid, push)
         return jsonify({"success": True, "message": f"{len(nums)} ቲኬቶች ተሻሻሉ"})
     except Exception as e:
         if conn: conn.rollback()
@@ -1329,6 +1276,12 @@ def add_winner():
         return jsonify({"error": str(e)}), 500
     finally:
         if conn: release_db_connection(conn)
+
+# ==================== ERROR HANDLER ====================
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logger.error(f"Unhandled: {e}")
+    return jsonify({"success": False, "error": str(e)}), 500
 
 # ==================== RUN ====================
 if __name__ == '__main__':
