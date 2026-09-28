@@ -334,16 +334,21 @@ def get_int_setting(key, fallback):
     except Exception:
         return fallback
 
-# ==================== DB INIT (Robust Migration) ====================
+# ==================== DB INIT (Force Reset & Autocommit) ====================
 def init_db():
     if not DATABASE_URL:
         return
     conn = None
     try:
         conn = get_db_connection()
+        conn.autocommit = True  # ለ DDL ትዕዛዞች በጣም አስፈላጊ ነው
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. ሰንጠረዞችን መፍጠር
+        # 1. አሮጌውን የ settings ሠንጠረዥ በኃይል ማጥፋት (ስquema ለመቀየር)
+        cur.execute("DROP TABLE IF EXISTS settings CASCADE;")
+        logger.info("✅ Old settings table dropped (if existed)")
+        
+        # 2. ሰንጠረዞችን በአዲስ መልክ መፍጠር
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -389,17 +394,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
-        
-        # 2. የ settings ሠንጠረዥ ማረጋገጫ እና ማስተካከያ (Force Drop & Recreate)
-        # አሮጌው ሠንጠረዥ 'key' የሚል አምድ ከሌለው በኃይል አጥፍቶ አዲስ ይፈጥራል
-        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='settings' AND column_name='key'")
-        if not cur.fetchone():
-            logger.warning("⚠️ Old settings table detected. Force recreating...")
-            conn.commit()  # Commit any pending changes first
-            cur.execute("DROP TABLE IF EXISTS settings CASCADE;")
-            conn.commit()  # Force the drop to commit immediately
-            logger.info("✅ Old settings table dropped.")
-        
         cur.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key VARCHAR(100) PRIMARY KEY,
@@ -422,10 +416,8 @@ def init_db():
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS receipt_file_id TEXT;")
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_name VARCHAR(100);")
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_phone VARCHAR(50);")
-            conn.commit()  # Commit the migrations immediately
             logger.info("✅ Tickets migrations applied successfully")
         except Exception as e:
-            conn.rollback()
             logger.info(f"⚠️ Tickets migration skipped: {e}")
 
         # 5. የቲኬት ቁጥሮችን መሙላት (ካልተሞሉ)
@@ -447,14 +439,13 @@ def init_db():
                 (aid,)
             )
 
-        # 7. ነባሪ ሴቲንጎችን መመዝገብ
+        # 7. ነባሪ ሴቲንጎችን መመዝገብ (አሁን ሠንጠረዡ ትክክለኛ ስለሆነ ይሰራል)
         for k, v in DEFAULT_SETTINGS.items():
             cur.execute(
                 "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
                 (k, v)
             )
 
-        conn.commit()
         cur.close()
         logger.info("✅ DB ready")
     except Exception as e:
