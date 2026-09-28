@@ -474,45 +474,88 @@ init_db_pool()
 
 # ==================== CLEANUP ====================
 def cleanup_expired_pendings():
+    """Cleanup expired tickets with auto-retry for stale SSL connections"""
     if not DATABASE_URL:
         return 0
-    conn = None
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        timeout_min = get_int_setting("reservation_minutes", RESERVATION_TIMEOUT_MINUTES)
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_min)
-        cur.execute("""
-            UPDATE tickets
-            SET status='available', user_id=NULL, user_name=NULL, user_phone=NULL,
-                referrer=NULL, receipt_file_id=NULL, price_paid=NULL, order_id=NULL,
-                reserved_at=NULL, updated_at=CURRENT_TIMESTAMP
-            WHERE status IN ('pending', 'reserved')
-              AND COALESCE(reserved_at, updated_at) < %s
-            RETURNING number;
-        """, (cutoff,))
-        released = [r['number'] for r in cur.fetchall()]
-        conn.commit()
-        cur.close()
-        if released:
-            logger.info(f"Released {len(released)} expired tickets")
-        return len(released)
-    except Exception as e:
-        logger.error(f"Cleanup error: {e}")
-        return 0
-    finally:
-        if conn: release_db_connection(conn)
-
-# Only run scheduler if NOT on Vercel
-if not IS_VERCEL:
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        scheduler = BackgroundScheduler(daemon=True)
-        scheduler.add_job(cleanup_expired_pendings, 'interval', minutes=1)
-        scheduler.start()
-        logger.info("✅ Scheduler started")
-    except Exception as e:
-        logger.warning(f"Scheduler not started: {e}")
+    
+    timeout_min = get_int_setting("reservation_minutes", RESERVATION_TIMEOUT_MINUTES)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_min)
+    
+    # Try up to 2 times (retry with fresh connection on SSL errors)
+    for attempt in range(2):
+        conn = None
+        try:
+            # On retry, bypass the pool and create a fresh connection
+            if attempt == 0:
+                conn = get_db_connection()
+            else:
+                db_url = DATABASE_URL
+                if ("supabase.co" in db_url or "pooler.supabase.com" in db_url) and "sslmode" not in db_url:
+                    separator = "&" if "?" in db_url else "?"
+                    db_url += f"{separator}sslmode=require"
+                conn = psycopg2.connect(db_url)
+                logger.info("🔄 Retry: fresh DB connection created")
+            
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("""
+                UPDATE tickets
+                SET status='available', user_id=NULL, user_name=NULL, user_phone=NULL,
+                    referrer=NULL, receipt_file_id=NULL, price_paid=NULL, order_id=NULL,
+                    reserved_at=NULL, updated_at=CURRENT_TIMESTAMP
+                WHERE status IN ('pending', 'reserved')
+                  AND COALESCE(reserved_at, updated_at) < %s
+                RETURNING number;
+            """, (cutoff,))
+            released = [r['number'] for r in cur.fetchall()]
+            conn.commit()
+            cur.close()
+            
+            # If using pool connection, return it
+            if attempt == 0:
+                release_db_connection(conn)
+                conn = None
+            else:
+                conn.close()
+                conn = None
+            
+            if released:
+                logger.info(f"✅ Released {len(released)} expired tickets")
+            return len(released)
+            
+        except psycopg2.OperationalError as e:
+            # SSL / connection error → close and retry with fresh connection
+            if conn:
+                try:
+                    if attempt == 0:
+                        # Discard the bad connection from the pool
+                        release_db_connection(conn)
+                    else:
+                        conn.close()
+                except Exception:
+                    pass
+                conn = None
+            
+            if "ssl" in str(e).lower() and attempt == 0:
+                logger.warning(f"⚠️ SSL error (attempt 1), retrying with fresh connection: {e}")
+                time.sleep(1)
+                continue  # Retry
+            else:
+                logger.error(f"Cleanup error (attempt {attempt + 1}): {e}")
+                return 0
+                
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+            if conn:
+                try:
+                    if attempt == 0:
+                        release_db_connection(conn)
+                    else:
+                        conn.close()
+                except Exception:
+                    pass
+            return 0
+    
+    return 0
 
 # ==================== API: CONFIG (public) ====================
 @app.route('/api/config', methods=['GET'])
