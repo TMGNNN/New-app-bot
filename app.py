@@ -122,8 +122,10 @@ db_pool = None
 if DATABASE_URL:
     try:
         # የ Supabase አገልግሎትን ለማስተካከል sslmode=require ማከል
-        if "supabase.co" in DATABASE_URL and "sslmode" not in DATABASE_URL:
-            DATABASE_URL += "?sslmode=require"
+        if ("supabase.co" in DATABASE_URL or "pooler.supabase.com" in DATABASE_URL) and "sslmode" not in DATABASE_URL:
+            separator = "&" if "?" in DATABASE_URL else "?"
+            DATABASE_URL += f"{separator}sslmode=require"
+        
         db_pool = ThreadedConnectionPool(minconn=1, maxconn=20, dsn=DATABASE_URL)
         logger.info("✅ DB Pool ready")
     except Exception as e:
@@ -340,6 +342,8 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 1. ሰንጠረዞችን መፍጠር
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -392,10 +396,28 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+        
+        # 2. ኢንዴክሶችን መፍጠር
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_order_id ON tickets(order_id);")
 
+        # 3. የዳታቤዝ ማስተካከያ (Migrations for existing tables)
+        try:
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS price_paid NUMERIC(10, 2);")
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS order_id VARCHAR(50);")
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reserved_at TIMESTAMP;")
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS referrer VARCHAR(100);")
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS receipt_file_id TEXT;")
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_name VARCHAR(100);")
+            cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_phone VARCHAR(50);")
+            cur.execute("ALTER TABLE settings ADD COLUMN IF NOT EXISTS value TEXT;")
+            cur.execute("ALTER TABLE settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+            logger.info("✅ Migrations applied successfully")
+        except Exception as e:
+            logger.info(f"⚠️ Migration skipped or already applied: {e}")
+
+        # 4. የቲኬት ቁጥሮችን መሙላት (ካልተሞሉ)
         cur.execute("SELECT COUNT(*) AS count FROM tickets;")
         count = cur.fetchone()['count']
         total = get_int_setting("total_tickets", TOTAL_TICKETS)
@@ -406,6 +428,7 @@ def init_db():
                 data
             )
 
+        # 5. አድሚኖችን መመዝገብ
         for aid in ADMIN_IDS:
             cur.execute(
                 "INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE) "
@@ -413,6 +436,7 @@ def init_db():
                 (aid,)
             )
 
+        # 6. ነባሪ ሴቲንጎችን መመዝገብ
         for k, v in DEFAULT_SETTINGS.items():
             cur.execute(
                 "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
