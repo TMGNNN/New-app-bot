@@ -997,6 +997,8 @@ def bot_webhook_handler():
     if not BOT_TOKEN:
         return jsonify({"status": "error"}), 500
     data = request.get_json(silent=True) or {}
+    
+    logger.info(f"📩 Webhook received: {list(data.keys())}")
 
     # ==================== HANDLE MESSAGES ====================
     message = data.get('message')
@@ -1007,7 +1009,9 @@ def bot_webhook_handler():
         first_name = message.get('from', {}).get('first_name', 'Friend')
         username = message.get('from', {}).get('username', '')
 
-        # ---------- STEP 1: /start ----------
+        logger.info(f"💬 Message from {chat_id}: {text[:50]}")
+
+        # ---------- /start ----------
         if text == '/start':
             welcome_text = (
                 f"👋 ሰላም *{first_name}*!\n\n"
@@ -1020,29 +1024,35 @@ def bot_webhook_handler():
                 f"━━━━━━━━━━━━━━━━━━"
             )
             
-            language_keyboard = {
-                "inline_keyboard": [
-                    [{"text": "🇪🇹 አማርኛ", "callback_data": "lang_am"}],
-                    [{"text": "🇪🇹 Afaan Oromoo", "callback_data": "lang_om"}],
-                    [{"text": "🇬🇧 English", "callback_data": "lang_en"}]
-                ]
+            # Use REPLY keyboard (more reliable than inline)
+            keyboard = {
+                "keyboard": [
+                    [{"text": "🇪🇹 አማርኛ"}],
+                    [{"text": "🇪🇹 Afaan Oromoo"}],
+                    [{"text": "🇬🇧 English"}]
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
             }
             
             requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                 "chat_id": chat_id,
                 "text": welcome_text,
                 "parse_mode": "Markdown",
-                "reply_markup": language_keyboard
+                "reply_markup": keyboard
             }, timeout=10)
 
-        # ---------- STEP 2: Language selected (text fallback) ----------
-        elif text and any(l in text for l in ["አማርኛ", "Oromoo", "English"]):
+        # ---------- Language selected (text-based) ----------
+        elif any(lang in text for lang in ["አማርኛ", "Oromoo", "English"]):
+            logger.info(f"🌍 Language selected: {text}")
             _send_phone_request(chat_id)
 
-        # ---------- STEP 3: Phone shared ----------
+        # ---------- Phone shared ----------
         if contact:
             phone = contact.get('phone_number')
             uid = str(message.get('from', {}).get('id'))
+            logger.info(f"📱 Phone received: {phone} from {uid}")
+            
             conn = None
             try:
                 conn = get_db_connection()
@@ -1086,13 +1096,126 @@ def bot_webhook_handler():
                 
             except Exception as e:
                 logger.error(f"Contact save: {e}")
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                    "chat_id": chat_id,
-                    "text": "❌ ስህተት ተፈጥሯል። እባክዎ እንደገና ይሞክሩ።"
-                }, timeout=5)
             finally:
                 if conn: release_db_connection(conn)
         return jsonify({"status": "ok"}), 200
+
+    # ==================== HANDLE CALLBACK QUERIES ====================
+    cb = data.get('callback_query')
+    if cb:
+        cb_id = cb.get('id')
+        from_id = str(cb.get('from', {}).get('id', ''))
+        raw = cb.get('data', '')
+        
+        logger.info(f"🔘 Callback from {from_id}: {raw}")
+
+        # ---------- Language Selection ----------
+        if raw.startswith('lang_'):
+            try:
+                lang_code = raw.replace('lang_', '')
+                lang_names = {'am': 'አማርኛ', 'om': 'Afaan Oromoo', 'en': 'English'}
+                lang_name = lang_names.get(lang_code, 'አማርኛ')
+                
+                # Answer the callback
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+                    json={"callback_query_id": cb_id, "text": f"✅ {lang_name}"},
+                    timeout=5
+                )
+                
+                # Get chat_id
+                msg = cb.get('message') or {}
+                chat_id = msg.get('chat', {}).get('id') or cb.get('from', {}).get('id')
+                
+                if chat_id:
+                    _send_phone_request(chat_id)
+                    logger.info(f"✅ Phone request sent to {chat_id}")
+                
+                return jsonify({"status": "ok"}), 200
+            except Exception as e:
+                logger.error(f"Lang callback error: {e}")
+                return jsonify({"status": "ok"}), 200
+
+        # ---------- Admin Approve/Reject ----------
+        if from_id not in ADMIN_IDS:
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+                          json={"callback_query_id": cb_id, "text": "❌ አድሚን አይደሉም", "show_alert": True}, timeout=5)
+            return jsonify({"status": "unauthorized"}), 200
+
+        if ':' not in raw or raw.split(':', 1)[0] not in ('app', 'rej'):
+            return jsonify({"status": "ignored"}), 200
+        action, order_id = raw.split(':', 1)
+
+        conn = None
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT number, user_id, status FROM tickets WHERE order_id = %s FOR UPDATE", (order_id,))
+            tickets = cur.fetchall()
+            if not tickets:
+                msg = "⚠️ ትዕዛዙ አልተገኘም"
+            elif any(t['status'] != 'pending' for t in tickets):
+                msg = "⚠️ አስቀድሞ ተስተካክሏል"
+            else:
+                nums = [t['number'] for t in tickets]
+                target = tickets[0]['user_id']
+                if action == 'app':
+                    cur.execute("UPDATE tickets SET status='sold', updated_at=CURRENT_TIMESTAMP WHERE order_id=%s", (order_id,))
+                    ns, msg = 'sold', f"✅ #{order_id} ፀድቋል"
+                    push = f"🎉 *ትዕዛዝዎ ፀድቋል!*\n\n🆔 Order: `{order_id}`\n🎟️ ቁጥሮች: `{','.join(map(str, nums))}`\n\n🎊 መልካም ዕድል!"
+                else:
+                    cur.execute("""UPDATE tickets SET status='available', user_id=NULL, user_name=NULL,
+                        user_phone=NULL, referrer=NULL, receipt_file_id=NULL, price_paid=NULL,
+                        order_id=NULL, reserved_at=NULL WHERE order_id=%s""", (order_id,))
+                    ns, msg = 'available', f"❌ #{order_id} ተሰርዟል"
+                    push = f"❌ *ትዕዛዝዎ ተሰርዟል*\n\n🆔 Order: `{order_id}`\n\nእባክዎ እንደገና ይሞክሩ።"
+                conn.commit()
+                send_telegram_push(target, push)
+                log_audit_action(from_id, f"CALLBACK_{action.upper()}", f"Order {order_id}")
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+                          json={"callback_query_id": cb_id, "text": msg, "show_alert": True}, timeout=5)
+        except Exception as e:
+            if conn: conn.rollback()
+            logger.error(f"CB error: {e}")
+        finally:
+            if conn: release_db_connection(conn)
+        return jsonify({"status": "ok"}), 200
+
+    return jsonify({"status": "ok"}), 200
+
+
+# ==================== HELPER: Send phone request ====================
+def _send_phone_request(chat_id):
+    """Send phone number request message"""
+    if not chat_id:
+        logger.warning("⚠️ _send_phone_request: no chat_id")
+        return
+    try:
+        phone_text = (
+            f"📱 *ስልክ ቁጥር ያጋሩ*\n\n"
+            f"ለመቀጠል ስልክ ቁጥርዎን ማጋራት ያስፈልጋል።\n\n"
+            f"👇 *ከታች ያለውን ቁልፍ ይጫኑ*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🔒 ስልክ ቁጥርዎ ለደህንነት ብቻ ያገለግላል።\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+        res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": phone_text,
+            "parse_mode": "Markdown",
+            "reply_markup": {
+                "keyboard": [[{
+                    "text": "📱 ስልክ ቁጥር አጋራ",
+                    "request_contact": True
+                }]],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            }
+        }, timeout=10)
+        logger.info(f"✅ Phone request sent to {chat_id}: {res.status_code}")
+        return res
+    except Exception as e:
+        logger.error(f"_send_phone_request error: {e}")
 
     # ==================== HANDLE CALLBACK QUERIES ====================
     cb = data.get('callback_query')
