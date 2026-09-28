@@ -334,7 +334,7 @@ def get_int_setting(key, fallback):
     except Exception:
         return fallback
 
-# ==================== DB INIT ====================
+# ==================== DB INIT (Robust Migration) ====================
 def init_db():
     if not DATABASE_URL:
         return
@@ -389,6 +389,14 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         ''')
+        
+        # 2. የ settings ሠንጠረዥ ማረጋገጫ እና ማስተካከያ
+        # አሮጌው ሠንጠረዥ 'key' የሚል አምድ ከሌለው አጥፍቶ አዲስ ይፈጥራል
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='settings' AND column_name='key'")
+        if not cur.fetchone():
+            logger.warning("⚠️ Old settings table detected. Recreating...")
+            cur.execute("DROP TABLE IF EXISTS settings CASCADE;")
+        
         cur.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key VARCHAR(100) PRIMARY KEY,
@@ -397,12 +405,12 @@ def init_db():
             );
         ''')
         
-        # 2. ኢንዴክሶችን መፍጠር
+        # 3. ኢንዴክሶችን መፍጠር
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_order_id ON tickets(order_id);")
 
-        # 3. የዳታቤዝ ማስተካከያ (Migrations for existing tables)
+        # 4. የቲኬት ሠንጠረዥ አምዶችን ማረጋገጥ (Migrations for tickets)
         try:
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS price_paid NUMERIC(10, 2);")
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS order_id VARCHAR(50);")
@@ -411,13 +419,11 @@ def init_db():
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS receipt_file_id TEXT;")
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_name VARCHAR(100);")
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS user_phone VARCHAR(50);")
-            cur.execute("ALTER TABLE settings ADD COLUMN IF NOT EXISTS value TEXT;")
-            cur.execute("ALTER TABLE settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
-            logger.info("✅ Migrations applied successfully")
+            logger.info("✅ Tickets migrations applied successfully")
         except Exception as e:
-            logger.info(f"⚠️ Migration skipped or already applied: {e}")
+            logger.info(f"⚠️ Tickets migration skipped: {e}")
 
-        # 4. የቲኬት ቁጥሮችን መሙላት (ካልተሞሉ)
+        # 5. የቲኬት ቁጥሮችን መሙላት (ካልተሞሉ)
         cur.execute("SELECT COUNT(*) AS count FROM tickets;")
         count = cur.fetchone()['count']
         total = get_int_setting("total_tickets", TOTAL_TICKETS)
@@ -428,7 +434,7 @@ def init_db():
                 data
             )
 
-        # 5. አድሚኖችን መመዝገብ
+        # 6. አድሚኖችን መመዝገብ
         for aid in ADMIN_IDS:
             cur.execute(
                 "INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE) "
@@ -436,7 +442,7 @@ def init_db():
                 (aid,)
             )
 
-        # 6. ነባሪ ሴቲንጎችን መመዝገብ
+        # 7. ነባሪ ሴቲንጎችን መመዝገብ
         for k, v in DEFAULT_SETTINGS.items():
             cur.execute(
                 "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
