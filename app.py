@@ -119,14 +119,19 @@ def favicon():
 
 # ==================== DB POOL ====================
 db_pool = None
-if DATABASE_URL:
+
+def init_db_pool():
+    """Initialize the connection pool after DB schema is ready"""
+    global db_pool
+    if not DATABASE_URL:
+        return
     try:
-        # የ Supabase አገልግሎትን ለማስተካከል sslmode=require ማከል
-        if ("supabase.co" in DATABASE_URL or "pooler.supabase.com" in DATABASE_URL) and "sslmode" not in DATABASE_URL:
-            separator = "&" if "?" in DATABASE_URL else "?"
-            DATABASE_URL += f"{separator}sslmode=require"
+        db_url = DATABASE_URL
+        if ("supabase.co" in db_url or "pooler.supabase.com" in db_url) and "sslmode" not in db_url:
+            separator = "&" if "?" in db_url else "?"
+            db_url += f"{separator}sslmode=require"
         
-        db_pool = ThreadedConnectionPool(minconn=1, maxconn=20, dsn=DATABASE_URL)
+        db_pool = ThreadedConnectionPool(minconn=1, maxconn=20, dsn=db_url)
         logger.info("✅ DB Pool ready")
     except Exception as e:
         logger.error(f"❌ DB Pool failed: {e}")
@@ -188,9 +193,11 @@ def _expected_admin_token():
     return hashlib.sha256(f"{ADMIN_PASSWORD}:{BOT_TOKEN or 'salt'}".encode()).hexdigest()
 
 def is_authorized_admin(req):
+    # 1) Password token
     token = req.headers.get('X-Admin-Token')
     if token and hmac.compare_digest(token, _expected_admin_token()):
         return True
+    # 2) Telegram admin ID
     json_data = req.get_json(silent=True) or {}
     user_id = req.headers.get('X-User-Id') or json_data.get('user_id') or req.args.get('user_id')
     if user_id and str(user_id) in ADMIN_IDS:
@@ -336,19 +343,27 @@ def get_int_setting(key, fallback):
 
 # ==================== DB INIT (Force Reset & Autocommit) ====================
 def init_db():
+    """Initialize database schema with direct connection and autocommit"""
     if not DATABASE_URL:
+        logger.warning("⚠️ DATABASE_URL not set, skipping DB init")
         return
-    conn = None
+    
+    db_url = DATABASE_URL
+    if ("supabase.co" in db_url or "pooler.supabase.com" in db_url) and "sslmode" not in db_url:
+        separator = "&" if "?" in db_url else "?"
+        db_url += f"{separator}sslmode=require"
+    
     try:
-        conn = get_db_connection()
-        conn.autocommit = True  # ለ DDL ትዕዛዞች በጣም አስፈላጊ ነው
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. አሮጌውን የ settings ሠንጠረዥ በኃይል ማጥፋት (ስquema ለመቀየር)
+        # 1. Force drop old settings table to fix schema conflicts
+        logger.info("⚠️ Checking and dropping old settings table...")
         cur.execute("DROP TABLE IF EXISTS settings CASCADE;")
         logger.info("✅ Old settings table dropped (if existed)")
         
-        # 2. ሰንጠረዞችን በአዲስ መልክ መፍጠር
+        # 2. Create tables with correct schema
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -402,12 +417,12 @@ def init_db():
             );
         ''')
         
-        # 3. ኢንዴክሶችን መፍጠር
+        # 3. Create indexes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_order_id ON tickets(order_id);")
 
-        # 4. የቲኬት ሠንጠረዥ አምዶችን ማረጋገጥ (Migrations for tickets)
+        # 4. Add missing columns to tickets table (for old schemas)
         try:
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS price_paid NUMERIC(10, 2);")
             cur.execute("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS order_id VARCHAR(50);")
@@ -420,18 +435,19 @@ def init_db():
         except Exception as e:
             logger.info(f"⚠️ Tickets migration skipped: {e}")
 
-        # 5. የቲኬት ቁጥሮችን መሙላት (ካልተሞሉ)
+        # 5. Populate tickets if empty
         cur.execute("SELECT COUNT(*) AS count FROM tickets;")
         count = cur.fetchone()['count']
-        total = get_int_setting("total_tickets", TOTAL_TICKETS)
+        total = int(get_setting("total_tickets", TOTAL_TICKETS))
         if count < total:
             data = [(i, 'available') for i in range(1, total + 1)]
             cur.executemany(
                 "INSERT INTO tickets (number, status) VALUES (%s, %s) ON CONFLICT (number) DO NOTHING",
                 data
             )
+            logger.info(f"✅ Populated {total - count} tickets")
 
-        # 6. አድሚኖችን መመዝገብ
+        # 6. Register admins
         for aid in ADMIN_IDS:
             cur.execute(
                 "INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE) "
@@ -439,7 +455,7 @@ def init_db():
                 (aid,)
             )
 
-        # 7. ነባሪ ሴቲንጎችን መመዝገብ (አሁን ሠንጠረዡ ትክክለኛ ስለሆነ ይሰራል)
+        # 7. Insert default settings
         for k, v in DEFAULT_SETTINGS.items():
             cur.execute(
                 "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
@@ -447,11 +463,14 @@ def init_db():
             )
 
         cur.close()
+        conn.close()
         logger.info("✅ DB ready")
     except Exception as e:
         logger.error(f"❌ DB init: {e}")
-    finally:
-        if conn: release_db_connection(conn)
+
+# Initialize DB schema FIRST, then the connection pool
+init_db()
+init_db_pool()
 
 # ==================== CLEANUP ====================
 def cleanup_expired_pendings():
@@ -484,6 +503,7 @@ def cleanup_expired_pendings():
     finally:
         if conn: release_db_connection(conn)
 
+# Only run scheduler if NOT on Vercel
 if not IS_VERCEL:
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -494,9 +514,7 @@ if not IS_VERCEL:
     except Exception as e:
         logger.warning(f"Scheduler not started: {e}")
 
-init_db()
-
-# ==================== API: CONFIG ====================
+# ==================== API: CONFIG (public) ====================
 @app.route('/api/config', methods=['GET'])
 def public_config():
     s = get_all_settings()
@@ -526,6 +544,15 @@ def public_config():
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"}), 200
+
+# ==================== CRON: cleanup ====================
+@app.route('/api/cron/cleanup', methods=['GET', 'POST'])
+def cron_cleanup():
+    secret = request.args.get('secret') or (request.get_json(silent=True) or {}).get('secret')
+    if secret != (os.environ.get("CRON_SECRET") or "cleanup"):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+    n = cleanup_expired_pendings()
+    return jsonify({"success": True, "released": n})
 
 # ==================== ADMIN: VERIFY PASSWORD ====================
 @app.route('/api/admin/verify-password', methods=['POST'])
@@ -602,11 +629,8 @@ def tickets_list():
 
         tickets = {r['number']: {"status": r['status']} for r in rows}
         res = jsonify({
-            "success": True,
-            "page": page,
-            "per_page": per_page,
-            "tickets": tickets,
-            "has_more": len(rows) == per_page
+            "success": True, "page": page, "per_page": per_page,
+            "tickets": tickets, "has_more": len(rows) == per_page
         })
         res.headers['Cache-Control'] = 'public, max-age=10'
         return res
@@ -624,7 +648,6 @@ def tickets_search():
         total = get_int_setting("total_tickets", TOTAL_TICKETS)
         if number < 1 or number > total:
             return jsonify({"success": False, "message": "የተሳሳተ ቁጥር"}), 400
-
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT number, status FROM tickets WHERE number = %s", (number,))
@@ -646,13 +669,11 @@ def pricing_api():
     max_order = get_int_setting("max_per_order", MAX_TICKETS_PER_ORDER)
     if qty < 0 or qty > max_order:
         return jsonify({"success": False, "message": "የተሳሳተ ብዛት"}), 400
-
     try:
         tiers = json.loads(get_setting("pricing_tiers", json.dumps(PRICING_TIERS)) or "[]")
     except Exception:
         tiers = PRICING_TIERS
     base_price = get_int_setting("base_price", BASE_PRICE)
-
     if qty <= 0:
         return jsonify({"success": True, "pricing": {"total": 0, "unit": base_price, "discount": 0, "base_total": 0}})
     base_total = qty * base_price
@@ -684,10 +705,7 @@ def reserve_tickets():
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            "SELECT number, status FROM tickets WHERE number = ANY(%s) FOR UPDATE",
-            (numbers,)
-        )
+        cur.execute("SELECT number, status FROM tickets WHERE number = ANY(%s) FOR UPDATE", (numbers,))
         rows = cur.fetchall()
         if len(rows) != len(set(numbers)) or any(r['status'] != 'available' for r in rows):
             conn.rollback()
@@ -1027,10 +1045,8 @@ def admin_settings():
         except Exception:
             s['pricing_tiers'] = PRICING_TIERS
         for k in ('base_price', 'total_tickets', 'max_per_order', 'reservation_minutes'):
-            try:
-                s[k] = int(s[k])
-            except Exception:
-                pass
+            try: s[k] = int(s[k])
+            except Exception: pass
         return jsonify({"success": True, "settings": s})
 
     data = request.get_json(silent=True) or {}
@@ -1051,7 +1067,7 @@ def admin_settings():
     log_audit_action(data.get('user_id', 'Admin'), "UPDATE_SETTINGS", f"Keys: {saved}")
     return jsonify({"success": True, "saved": saved})
 
-# ==================== ADMIN: ORDERS ====================
+# ==================== ADMIN: ORDERS LIST ====================
 @app.route('/api/admin/orders', methods=['GET'])
 def admin_orders_list():
     if not is_authorized_admin(request):
