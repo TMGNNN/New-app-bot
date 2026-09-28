@@ -98,8 +98,12 @@ DEFAULT_SETTINGS = {
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
-allowed_origins = ["*"] if WEB_APP_URL == "*" else [WEB_APP_URL]
-CORS(app, resources={r"/api/*": {"origins": allowed_origins}}, supports_credentials=True)
+# CORS — allow any origin for API calls (headers-based auth, not cookies)
+CORS(app, resources={r"/api/*": {
+    "origins": "*",
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "X-Telegram-Init-Data", "X-Admin-Token", "X-User-Id"]
+}}, supports_credentials=False)
 
 limiter = Limiter(
     get_remote_address,
@@ -193,11 +197,9 @@ def _expected_admin_token():
     return hashlib.sha256(f"{ADMIN_PASSWORD}:{BOT_TOKEN or 'salt'}".encode()).hexdigest()
 
 def is_authorized_admin(req):
-    # 1) Password token
     token = req.headers.get('X-Admin-Token')
     if token and hmac.compare_digest(token, _expected_admin_token()):
         return True
-    # 2) Telegram admin ID
     json_data = req.get_json(silent=True) or {}
     user_id = req.headers.get('X-User-Id') or json_data.get('user_id') or req.args.get('user_id')
     if user_id and str(user_id) in ADMIN_IDS:
@@ -472,7 +474,7 @@ def init_db():
 init_db()
 init_db_pool()
 
-# ==================== CLEANUP ====================
+# ==================== CLEANUP (with retry) ====================
 def cleanup_expired_pendings():
     """Cleanup expired tickets with auto-retry for stale SSL connections"""
     if not DATABASE_URL:
@@ -485,7 +487,6 @@ def cleanup_expired_pendings():
     for attempt in range(2):
         conn = None
         try:
-            # On retry, bypass the pool and create a fresh connection
             if attempt == 0:
                 conn = get_db_connection()
             else:
@@ -510,7 +511,6 @@ def cleanup_expired_pendings():
             conn.commit()
             cur.close()
             
-            # If using pool connection, return it
             if attempt == 0:
                 release_db_connection(conn)
                 conn = None
@@ -523,11 +523,9 @@ def cleanup_expired_pendings():
             return len(released)
             
         except psycopg2.OperationalError as e:
-            # SSL / connection error → close and retry with fresh connection
             if conn:
                 try:
                     if attempt == 0:
-                        # Discard the bad connection from the pool
                         release_db_connection(conn)
                     else:
                         conn.close()
@@ -538,7 +536,7 @@ def cleanup_expired_pendings():
             if "ssl" in str(e).lower() and attempt == 0:
                 logger.warning(f"⚠️ SSL error (attempt 1), retrying with fresh connection: {e}")
                 time.sleep(1)
-                continue  # Retry
+                continue
             else:
                 logger.error(f"Cleanup error (attempt {attempt + 1}): {e}")
                 return 0
@@ -556,6 +554,17 @@ def cleanup_expired_pendings():
             return 0
     
     return 0
+
+# Only run scheduler if NOT on Vercel
+if not IS_VERCEL:
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        scheduler = BackgroundScheduler(daemon=True)
+        scheduler.add_job(cleanup_expired_pendings, 'interval', minutes=1)
+        scheduler.start()
+        logger.info("✅ Scheduler started")
+    except Exception as e:
+        logger.warning(f"Scheduler not started: {e}")
 
 # ==================== API: CONFIG (public) ====================
 @app.route('/api/config', methods=['GET'])
@@ -955,6 +964,33 @@ def get_winners():
     finally:
         if conn: release_db_connection(conn)
 
+# ==================== HELPER: Send phone request ====================
+def _send_phone_request(chat_id):
+    """Send phone number request message"""
+    if not chat_id:
+        return
+    phone_text = (
+        f"📱 *ስልክ ቁጥር ያጋሩ*\n\n"
+        f"ለመቀጠል ስልክ ቁጥርዎን ማጋራት ያስፈልጋል።\n\n"
+        f"👇 *ከታች ያለውን ቁልፍ ይጫኑ*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔒 ስልክ ቁጥርዎ ለደህንነት ብቻ ያገለግላል።\n"
+        f"━━━━━━━━━━━━━━━━━━"
+    )
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+        "chat_id": chat_id,
+        "text": phone_text,
+        "parse_mode": "Markdown",
+        "reply_markup": {
+            "keyboard": [[{
+                "text": "📱 ስልክ ቁጥር አጋራ",
+                "request_contact": True
+            }]],
+            "resize_keyboard": True,
+            "one_time_keyboard": True
+        }
+    }, timeout=10)
+
 # ==================== BOT WEBHOOK ====================
 @app.route('/bot/webhook', methods=['POST'])
 def bot_webhook_handler():
@@ -962,39 +998,48 @@ def bot_webhook_handler():
         return jsonify({"status": "error"}), 500
     data = request.get_json(silent=True) or {}
 
+    # ==================== HANDLE MESSAGES ====================
     message = data.get('message')
     if message:
         chat_id = message.get('chat', {}).get('id')
-        text = message.get('text', '')
+        text = message.get('text', '').strip()
         contact = message.get('contact')
+        first_name = message.get('from', {}).get('first_name', 'Friend')
+        username = message.get('from', {}).get('username', '')
 
+        # ---------- STEP 1: /start ----------
         if text == '/start':
-            keyboard = {
-                "keyboard": [
-                    [{"text": "🇪🇹 አማርኛ"}],
-                    [{"text": "🇪🇹 Afaan Oromoo"}],
-                    [{"text": "🇬🇧 English"}]
-                ],
-                "resize_keyboard": True,
-                "one_time_keyboard": True
+            welcome_text = (
+                f"👋 ሰላም *{first_name}*!\n\n"
+                f"🚗 *Getachew Fikadu Jirata* የቲኬት ዕድል መተግበሪያ እንኳን ደህና መጡ!\n\n"
+                f"🎟️ የ BYD Sealion 6 መኪና ዕድል ለመግዛት ይህ ቦት ያገለግልዎታል።\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🌍 *እባክዎ ቋንቋ ይምረጡ*\n"
+                f"🌍 *Maaloo Afaan filadhaa*\n"
+                f"🌍 *Please select your language*\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+            
+            language_keyboard = {
+                "inline_keyboard": [
+                    [{"text": "🇪🇹 አማርኛ", "callback_data": "lang_am"}],
+                    [{"text": "🇪🇹 Afaan Oromoo", "callback_data": "lang_om"}],
+                    [{"text": "🇬🇧 English", "callback_data": "lang_en"}]
+                ]
             }
+            
             requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                 "chat_id": chat_id,
-                "text": "🚗 Getachew Fikadu Jirata\n\nእባክዎ ቋንቋ ይምረጡ።\nMaaloo Afaan filadhaa.\nPlease select your language.",
-                "reply_markup": keyboard
-            }, timeout=5)
+                "text": welcome_text,
+                "parse_mode": "Markdown",
+                "reply_markup": language_keyboard
+            }, timeout=10)
 
+        # ---------- STEP 2: Language selected (text fallback) ----------
         elif text and any(l in text for l in ["አማርኛ", "Oromoo", "English"]):
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
-                "chat_id": chat_id,
-                "text": "ለመቀጠል ስልክዎን ያጋሩ።\nPlease share your phone number to continue.",
-                "reply_markup": {
-                    "keyboard": [[{"text": "📱 ስልክ ቁጥር አጋራ", "request_contact": True}]],
-                    "resize_keyboard": True,
-                    "one_time_keyboard": True
-                }
-            }, timeout=5)
+            _send_phone_request(chat_id)
 
+        # ---------- STEP 3: Phone shared ----------
         if contact:
             phone = contact.get('phone_number')
             uid = str(message.get('from', {}).get('id'))
@@ -1003,39 +1048,79 @@ def bot_webhook_handler():
                 conn = get_db_connection()
                 cur = conn.cursor()
                 cur.execute("""
-                    INSERT INTO users (user_id, phone_number) VALUES (%s, %s)
-                    ON CONFLICT (user_id) DO UPDATE SET phone_number = %s
-                """, (uid, phone, phone))
+                    INSERT INTO users (user_id, first_name, username, phone_number) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET 
+                        phone_number = EXCLUDED.phone_number,
+                        first_name = EXCLUDED.first_name,
+                        username = EXCLUDED.username
+                """, (uid, first_name, username, phone))
                 conn.commit()
                 cur.close()
 
+                success_text = (
+                    f"✅ *ስልክ ቁጥርዎ ተቀብለናል!*\n\n"
+                    f"📱 ስልክ: `{phone}`\n"
+                    f"👤 ስም: *{first_name}*\n\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🎟️ *የቲኬት መተግበሪያውን ለመክፈት* ከታች ያለውን ቁልፍ ይጫኑ\n\n"
+                    f"🎁 *የቲኬት ዋጋ:* 3,500 ብር\n"
+                    f"🎁 *ጠቅላላ ቲኬቶች:* 3,500\n"
+                    f"🏆 *ሽልማት:* BYD Sealion 6\n"
+                    f"━━━━━━━━━━━━━━━━━━"
+                )
+                
+                mini_app_keyboard = {
+                    "inline_keyboard": [[{
+                        "text": "🎟️ የቲኬት መተግበሪያን ክፈት",
+                        "web_app": {"url": WEB_APP_URL}
+                    }]]
+                }
+                
                 requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
                     "chat_id": chat_id,
-                    "text": "✅ የስልክ ቁጥርዎ ተቀብለናል!\n\n🎟️ የቲኬት መተግበሪያውን ለመክፈት ከታች ያለውን ቁልፍ ይጫኑ፦",
-                    "reply_markup": {
-                        "inline_keyboard": [[{
-                            "text": "🎟️ የቲኬት መተግበሪያን ክፈት",
-                            "web_app": {"url": WEB_APP_URL}
-                        }]]
-                    }
-                }, timeout=5)
+                    "text": success_text,
+                    "parse_mode": "Markdown",
+                    "reply_markup": mini_app_keyboard
+                }, timeout=10)
+                
             except Exception as e:
                 logger.error(f"Contact save: {e}")
+                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={
+                    "chat_id": chat_id,
+                    "text": "❌ ስህተት ተፈጥሯል። እባክዎ እንደገና ይሞክሩ።"
+                }, timeout=5)
             finally:
                 if conn: release_db_connection(conn)
         return jsonify({"status": "ok"}), 200
 
+    # ==================== HANDLE CALLBACK QUERIES ====================
     cb = data.get('callback_query')
     if not cb:
         return jsonify({"status": "ok"}), 200
+
     cb_id = cb.get('id')
     from_id = str(cb.get('from', {}).get('id', ''))
+    raw = cb.get('data', '')
+
+    # ---------- Language Selection Callbacks ----------
+    if raw.startswith('lang_'):
+        lang_code = raw.replace('lang_', '')
+        lang_names = {'am': 'አማርኛ', 'om': 'Afaan Oromoo', 'en': 'English'}
+        lang_name = lang_names.get(lang_code, 'አማርኛ')
+        
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+                      json={"callback_query_id": cb_id, "text": f"✅ {lang_name}"}, timeout=5)
+        
+        _send_phone_request(cb.get('message', {}).get('chat', {}).get('id'))
+        return jsonify({"status": "ok"}), 200
+
+    # ---------- Admin Approve/Reject Callbacks ----------
     if from_id not in ADMIN_IDS:
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
                       json={"callback_query_id": cb_id, "text": "❌ አድሚን አይደሉም", "show_alert": True}, timeout=5)
         return jsonify({"status": "unauthorized"}), 200
 
-    raw = cb.get('data', '')
     if ':' not in raw or raw.split(':', 1)[0] not in ('app', 'rej'):
         return jsonify({"status": "ignored"}), 200
     action, order_id = raw.split(':', 1)
@@ -1056,13 +1141,23 @@ def bot_webhook_handler():
             if action == 'app':
                 cur.execute("UPDATE tickets SET status='sold', updated_at=CURRENT_TIMESTAMP WHERE order_id=%s", (order_id,))
                 ns, msg = 'sold', f"✅ #{order_id} ፀድቋል"
-                push = f"🎉 ትዕዛዝዎ #{order_id} ፀድቋል! ቁጥሮች: {nums}"
+                push = (
+                    f"🎉 *ትዕዛዝዎ ፀድቋል!*\n\n"
+                    f"🆔 Order: `{order_id}`\n"
+                    f"🎟️ ቁጥሮች: `{','.join(map(str, nums))}`\n\n"
+                    f"🎊 መልካም ዕድል!"
+                )
             else:
                 cur.execute("""UPDATE tickets SET status='available', user_id=NULL, user_name=NULL,
                     user_phone=NULL, referrer=NULL, receipt_file_id=NULL, price_paid=NULL,
                     order_id=NULL, reserved_at=NULL WHERE order_id=%s""", (order_id,))
                 ns, msg = 'available', f"❌ #{order_id} ተሰርዟል"
-                push = f"❌ ትዕዛዝዎ #{order_id} ተሰርዟል"
+                push = (
+                    f"❌ *ትዕዛዝዎ ተሰርዟል*\n\n"
+                    f"🆔 Order: `{order_id}`\n"
+                    f"🎟️ ቁጥሮች: `{','.join(map(str, nums))}`\n\n"
+                    f"እባክዎ እንደገና ይሞክሩ ወይም አስተዳዳሪውን ያግኙ።"
+                )
             conn.commit()
             send_telegram_push(target, push)
             log_audit_action(from_id, f"CALLBACK_{action.upper()}", f"Order {order_id}")
