@@ -41,13 +41,12 @@ DRAW_END_AT = os.environ.get("DRAW_END_AT")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin2024")
 IS_VERCEL = os.environ.get("VERCEL") == "1"
 
-# ✅ FIX: Three admin IDs configured as fallback
+# ✅ Three admin IDs (fallback if env not set)
 ADMIN_IDS = [a.strip() for a in os.environ.get(
     "ADMIN_IDS",
     "8982566651,6349936975,800715162"
 ).split(",") if a.strip()]
 
-# Log admin IDs at startup for verification
 logger.info(f"🔍 ADMIN_IDS loaded: {len(ADMIN_IDS)} configured")
 for i, aid in enumerate(ADMIN_IDS, 1):
     logger.info(f"   [{i}] {aid}")
@@ -198,11 +197,9 @@ def _expected_admin_token():
     return hashlib.sha256(f"{ADMIN_PASSWORD}:{BOT_TOKEN or 'insecure'}".encode()).hexdigest()
 
 def is_authorized_admin(req):
-    # Method 1: Token from password login
     token = req.headers.get('X-Admin-Token')
     if token and hmac.compare_digest(token, _expected_admin_token()):
         return True
-    # Method 2: Telegram initData user ID in ADMIN_IDS
     init_data = req.headers.get('X-Telegram-Init-Data')
     if init_data and verify_telegram_data(init_data):
         try:
@@ -232,8 +229,23 @@ def send_telegram_push(chat_id, text, retries=2):
                 time.sleep(0.5)
 
 def send_telegram_admin_notification(user_name, user_phone, numbers, total_price, referrer, receipt_b64, user_id, order_id):
-    if not (ADMIN_CHAT_ID and BOT_TOKEN):
+    """📸 Send order notification (with receipt photo) to ALL admins"""
+    if not BOT_TOKEN:
+        logger.warning("⚠️ BOT_TOKEN not set")
         return None
+
+    # ✅ Build list of all admin recipients (ADMIN_IDS + ADMIN_CHAT_ID, deduplicated)
+    recipients = []
+    for aid in ADMIN_IDS:
+        if aid and str(aid) not in recipients:
+            recipients.append(str(aid))
+    if ADMIN_CHAT_ID and str(ADMIN_CHAT_ID) not in recipients:
+        recipients.append(str(ADMIN_CHAT_ID))
+
+    if not recipients:
+        logger.warning("⚠️ No admin recipients configured")
+        return None
+
     nums_str = ",".join(map(str, numbers))
     caption = (
         f"🆕 **አዲስ የቲኬት ትዕዛዝ**\n\n"
@@ -251,27 +263,82 @@ def send_telegram_admin_notification(user_name, user_phone, numbers, total_price
             {"text": "❌ ሰርዝ", "callback_data": f"rej:{order_id}"}
         ]]
     }
-    file_id = None
-    try:
-        if receipt_b64 and "," in receipt_b64:
+
+    # Prepare receipt image (decode once, reuse for all admins)
+    image_data = None
+    if receipt_b64 and "," in receipt_b64:
+        try:
             _, encoded = receipt_b64.split(",", 1)
             image_data = base64.b64decode(encoded)
-            files = {'photo': ('receipt.jpg', io.BytesIO(image_data), 'image/jpeg')}
-            payload = {
-                'chat_id': ADMIN_CHAT_ID, 'caption': caption,
-                'parse_mode': 'Markdown', 'reply_markup': json.dumps(reply_markup)
-            }
-            res = requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data=payload, files=files, timeout=30
-            ).json()
+        except Exception as e:
+            logger.error(f"Receipt decode error: {e}")
+
+    file_id = None
+    success_count = 0
+
+    # ✅ Send to EACH admin individually
+    for i, chat_id in enumerate(recipients):
+        try:
+            if image_data:
+                files = {'photo': ('receipt.jpg', io.BytesIO(image_data), 'image/jpeg')}
+                payload = {
+                    'chat_id': chat_id,
+                    'caption': caption,
+                    'parse_mode': 'Markdown',
+                    'reply_markup': json.dumps(reply_markup)
+                }
+                res = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                    data=payload, files=files, timeout=30
+                ).json()
+            else:
+                res = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": caption + "\n\n⚠️ ምንም ደረሰኝ አልተላከም",
+                        "parse_mode": "Markdown",
+                        "reply_markup": reply_markup
+                    }, timeout=10
+                ).json()
+
             if res.get('ok'):
-                photos = res['result'].get('photo', [])
-                if photos:
-                    file_id = photos[-1]['file_id']
-    except Exception as e:
-        logger.error(f"Admin notify error: {e}")
+                success_count += 1
+                logger.info(f"✅ Receipt sent to admin [{i+1}/{len(recipients)}] {chat_id}")
+                if file_id is None and image_data:
+                    photos = res.get('result', {}).get('photo', [])
+                    if photos:
+                        file_id = photos[-1]['file_id']
+            else:
+                err_msg = res.get('description', 'unknown')
+                logger.warning(f"⚠️ Failed to send to {chat_id}: {err_msg}")
+
+        except Exception as e:
+            logger.error(f"❌ Admin notify error for {chat_id}: {e}")
+
+        # ⚡ Small delay to avoid Telegram rate limits
+        if i < len(recipients) - 1:
+            time.sleep(0.3)
+
+    logger.info(f"📸 Receipt sent to {success_count}/{len(recipients)} admins")
     return file_id
+
+def notify_other_admins(exclude_id, text):
+    """📢 Notify all admins EXCEPT the one who performed the action"""
+    if not BOT_TOKEN:
+        return
+    exclude = str(exclude_id)
+    for aid in ADMIN_IDS:
+        if str(aid) == exclude:
+            continue
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": aid, "text": text, "parse_mode": "Markdown"},
+                timeout=5
+            )
+        except Exception as e:
+            logger.error(f"notify_other_admins({aid}): {e}")
 
 def log_audit_action(admin_id, action, details):
     conn = None
@@ -363,7 +430,6 @@ def get_int_setting(key, fallback):
 
 # ==================== DB INIT ====================
 def init_db():
-    """✅ FIX: No more DROP TABLE settings CASCADE"""
     if not DATABASE_URL:
         logger.warning("⚠️ DATABASE_URL not set")
         return
@@ -465,7 +531,7 @@ def init_db():
             )
             logger.info(f"✅ Populated {total - count} tickets")
 
-        # ✅ Register all 3 admins
+        # ✅ Register all admins
         for aid in ADMIN_IDS:
             cur.execute(
                 "INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE) "
@@ -585,7 +651,8 @@ def public_config():
 def health_check():
     return jsonify({
         "status": "healthy",
-        "admin_count": len(ADMIN_IDS)
+        "admin_count": len(ADMIN_IDS),
+        "admin_ids": ADMIN_IDS
     }), 200
 
 @app.route('/api/cron/cleanup', methods=['GET', 'POST'])
@@ -608,7 +675,7 @@ def verify_admin_password():
         return jsonify({"success": True, "token": _expected_admin_token()})
     return jsonify({"success": False, "error": "የተሳሳተ የይለፍ ቃል"}), 401
 
-# ==================== WHOAMI (Debug) ====================
+# ==================== WHOAMI ====================
 @app.route('/api/admin/whoami', methods=['GET'])
 def whoami():
     init_data = request.headers.get('X-Telegram-Init-Data')
@@ -841,6 +908,7 @@ def submit_order():
             conn.rollback()
             return jsonify({"success": False, "message": "Reservation ጊዜው አልቋል"}), 409
 
+        # ✅ Send receipt to ALL admins
         file_id = send_telegram_admin_notification(
             user_name, user_phone, selected, total_price,
             referrer, receipt_b64, user_id, order_id
@@ -1363,13 +1431,27 @@ def bot_webhook_handler():
                 if not args:
                     _reply_admin(chat_id, "❌ አጠቃቀም: `/approve ORD-xxx`")
                 else:
-                    _reply_admin(chat_id, _admin_approve(args))
+                    result = _admin_approve(args)
+                    _reply_admin(chat_id, result)
+                    # ✅ Notify other admins
+                    notify_other_admins(chat_id,
+                        f"✅ *ትዕዛዝ ተፀድቋል*\n\n"
+                        f"🆔 `{args}`\n"
+                        f"👤 ያጸደቀው: `{chat_id}`"
+                    )
 
             elif cmd == '/reject':
                 if not args:
                     _reply_admin(chat_id, "❌ አጠቃቀም: `/reject ORD-xxx`")
                 else:
-                    _reply_admin(chat_id, _admin_reject(args))
+                    result = _admin_reject(args)
+                    _reply_admin(chat_id, result)
+                    # ✅ Notify other admins
+                    notify_other_admins(chat_id,
+                        f"❌ *ትዕዛዝ ተሰርዟል*\n\n"
+                        f"🆔 `{args}`\n"
+                        f"👤 የሰረዘው: `{chat_id}`"
+                    )
 
             elif cmd == '/search':
                 try:
@@ -1535,6 +1617,23 @@ def bot_webhook_handler():
             conn.commit()
             send_telegram_push(target, push)
             log_audit_action(from_id, f"CALLBACK_{action.upper()}", f"Order {order_id}")
+
+            # ✅ Notify other admins of the action
+            if action == 'app':
+                notify_other_admins(from_id,
+                    f"✅ *ትዕዛዝ ተፀድቋል*\n\n"
+                    f"🆔 `{order_id}`\n"
+                    f"🎟️ ቁጥሮች: `{','.join(map(str, nums))}`\n"
+                    f"👤 ያጸደቀው: `{from_id}`"
+                )
+            else:
+                notify_other_admins(from_id,
+                    f"❌ *ትዕዛዝ ተሰርዟል*\n\n"
+                    f"🆔 `{order_id}`\n"
+                    f"🎟️ ቁጥሮች: `{','.join(map(str, nums))}`\n"
+                    f"👤 የሰረዘው: `{from_id}`"
+                )
+
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
                       json={"callback_query_id": cb_id, "text": msg, "show_alert": True}, timeout=5)
     except Exception as e:
@@ -1650,6 +1749,13 @@ def admin_approve_order():
         cur.close()
         send_telegram_push(target, f"🎉 ትዕዛዝዎ #{order_id} ፀድቋል! ቁጥሮች: {nums}")
         log_audit_action('Admin', "APPROVE_ORDER", order_id)
+
+        # ✅ Notify other admins
+        notify_other_admins('Admin',
+            f"✅ *ትዕዛዝ ተፀድቋል (Admin Panel)*\n\n"
+            f"🆔 `{order_id}`\n"
+            f"🎟️ ቁጥሮች: `{','.join(map(str, nums))}`"
+        )
         return jsonify({"success": True})
     except Exception as e:
         if conn: conn.rollback()
@@ -1686,6 +1792,13 @@ def admin_reject_order():
         cur.close()
         send_telegram_push(target, f"❌ ትዕዛዝዎ #{order_id} ተሰርዟል")
         log_audit_action('Admin', "REJECT_ORDER", order_id)
+
+        # ✅ Notify other admins
+        notify_other_admins('Admin',
+            f"❌ *ትዕዛዝ ተሰርዟል (Admin Panel)*\n\n"
+            f"🆔 `{order_id}`\n"
+            f"🎟️ ቁጥሮች: `{','.join(map(str, nums))}`"
+        )
         return jsonify({"success": True})
     except Exception as e:
         if conn: conn.rollback()
