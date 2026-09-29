@@ -43,8 +43,8 @@ IS_VERCEL = os.environ.get("VERCEL") == "1"
 IS_PRODUCTION = os.environ.get("FLASK_ENV") == "production" or os.environ.get("RENDER") == "true"
 
 # ─── SECURITY: No default password! ───
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")           # plaintext (bootstrap)
-ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH") # scrypt$... (preferred)
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH")
 CRON_SECRET = os.environ.get("CRON_SECRET")
 
 if not ADMIN_PASSWORD and not ADMIN_PASSWORD_HASH:
@@ -56,9 +56,8 @@ if ADMIN_PASSWORD and not ADMIN_PASSWORD_HASH:
 
 ADMIN_IDS = [a.strip() for a in os.environ.get("ADMIN_IDS", "").split(",") if a.strip()]
 
-# ─── Password hashing (scrypt — stdlib, no external deps) ───
+# ─── Password hashing ───
 def hash_password(password: str, salt: bytes = None) -> str:
-    """Format: scrypt$N$r$p$b64(salt)$b64(hash)"""
     if salt is None:
         salt = secrets.token_bytes(16)
     n, r, p = 2**14, 8, 1
@@ -191,9 +190,9 @@ def require_verified_user(req, supplied_user_id=None):
         return None
     return verified
 
-# ─── ADMIN SESSIONS (server-restart invalidates all tokens) ───
-_admin_sessions = {}  # {token: {"exp": ts, "uid": str, "ip": str}}
-ADMIN_SESSION_TTL = 3600  # 1 hour
+# ─── ADMIN SESSIONS ───
+_admin_sessions = {}
+ADMIN_SESSION_TTL = 3600
 
 def _issue_admin_session(user_id: str, ip: str) -> str:
     tok = secrets.token_urlsafe(32)
@@ -202,7 +201,6 @@ def _issue_admin_session(user_id: str, ip: str) -> str:
         "uid": str(user_id),
         "ip": ip,
     }
-    # Prune expired
     now = time.time()
     for k in list(_admin_sessions.keys()):
         if _admin_sessions[k]["exp"] < now:
@@ -216,8 +214,6 @@ def _check_admin_session(tok: str, ip: str) -> dict:
     if s["exp"] < time.time():
         _admin_sessions.pop(tok, None)
         return None
-    # Optional: bind to IP for defense in depth
-    # if s["ip"] != ip: return None
     return s
 
 def is_authorized_admin(req):
@@ -251,7 +247,6 @@ def send_telegram_push(chat_id, text):
 
 def send_admin_notification(user_name, user_phone, numbers, total_price,
                              referrer, receipt_data_url, user_id, order_id):
-    """Returns (file_id, ok). Called AFTER DB commit."""
     if not (ADMIN_CHAT_ID and BOT_TOKEN): return None, False
     nums_str = ",".join(map(str, numbers))
     caption = (
@@ -282,7 +277,6 @@ def send_admin_notification(user_name, user_phone, numbers, total_price,
                 photos = res['result'].get('photo', [])
                 if photos: file_id = photos[-1]['file_id']
                 return file_id, True
-        # Text-only fallback
         res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                             json={"chat_id": ADMIN_CHAT_ID, "text": caption,
                                   "parse_mode": "Markdown",
@@ -356,7 +350,7 @@ def get_int_setting(key, fallback):
     try: return int(get_setting(key, fallback))
     except Exception: return fallback
 
-# ==================== DB INIT (never drops, adds orders table) ====================
+# ==================== DB INIT ====================
 def init_db():
     if not DATABASE_URL:
         logger.warning("⚠️ DATABASE_URL not set")
@@ -368,7 +362,6 @@ def init_db():
         conn = psycopg2.connect(db_url); conn.autocommit = True
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # ─── ORDERS TABLE (main entity) ───
         cur.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 order_id VARCHAR(50) PRIMARY KEY,
@@ -393,7 +386,6 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(order_status);")
 
-        # ─── USERS ───
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id VARCHAR(50) PRIMARY KEY,
@@ -405,7 +397,6 @@ def init_db():
             );
         ''')
 
-        # ─── TICKETS ───
         cur.execute('''
             CREATE TABLE IF NOT EXISTS tickets (
                 number INTEGER PRIMARY KEY,
@@ -423,7 +414,6 @@ def init_db():
             );
         ''')
 
-        # ─── WINNERS / AUDIT / SETTINGS ───
         cur.execute('''
             CREATE TABLE IF NOT EXISTS winners (
                 id SERIAL PRIMARY KEY,
@@ -455,12 +445,12 @@ def init_db():
         count = cur.fetchone()['count']
         total = int(get_setting("total_tickets", TOTAL_TICKETS))
         if count < total:
-            existing = {r['number'] for r in cur.execute("SELECT number FROM tickets") or []}
             cur.execute("SELECT number FROM tickets")
             existing = {r['number'] for r in cur.fetchall()}
             data = [(i, 'available') for i in range(1, total + 1) if i not in existing]
             if data:
                 cur.executemany("INSERT INTO tickets (number, status) VALUES (%s, %s) ON CONFLICT DO NOTHING", data)
+                logger.info(f"✅ Populated {len(data)} tickets")
 
         for aid in ADMIN_IDS:
             cur.execute("""INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE)
@@ -479,7 +469,6 @@ init_db_pool()
 
 # ==================== RECEIPT VALIDATION ====================
 def validate_receipt(receipt_data_url: str):
-    """Returns (ok, mime, size, error_msg). Strict server-side validation."""
     if not receipt_data_url:
         return False, None, 0, "Receipt required"
     try:
@@ -491,22 +480,20 @@ def validate_receipt(receipt_data_url: str):
         mime = header.split(";")[0].replace("data:", "")
         if mime not in RECEIPT_ALLOWED_MIMES:
             return False, None, 0, "Only JPEG/PNG/WebP allowed"
-        # Base64 validate
         decoded = base64.b64decode(encoded, validate=True)
         size = len(decoded)
         if size > RECEIPT_MAX_BYTES:
             return False, None, 0, f"Receipt too large (max {RECEIPT_MAX_BYTES//1024//1024}MB)"
         if size < 100:
             return False, None, 0, "Receipt too small"
-        # Magic byte check
         is_jpeg = decoded[:3] == b'\xff\xd8\xff'
         is_png = decoded[:8] == b'\x89PNG\r\n\x1a\n'
         is_webp = decoded[:4] == b'RIFF' and decoded[8:12] == b'WEBP'
         if not (is_jpeg or is_png or is_webp):
             return False, None, 0, "Invalid image file"
         return True, mime, size, None
-    except Exception as e:
-        return False, None, 0, f"Receipt decode error"
+    except Exception:
+        return False, None, 0, "Receipt decode error"
 
 # ==================== CLEANUP ====================
 def cleanup_expired_pendings():
@@ -535,7 +522,6 @@ def cleanup_expired_pendings():
                 RETURNING number, order_id;
             """, (cutoff,))
             released = cur.fetchall()
-            # Mark orders as expired
             order_ids = [r['order_id'] for r in released if r['order_id']]
             if order_ids:
                 cur.execute("""UPDATE orders SET order_status='expired', updated_at=CURRENT_TIMESTAMP
@@ -755,7 +741,7 @@ def reserve_tickets():
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # ─── Business rule: user cannot hold duplicate active reservations ───
+        # Business rule: user cannot hold duplicate active reservations
         cur.execute("""SELECT number FROM tickets WHERE user_id = %s AND status = 'reserved'
                        AND reserved_at > NOW() - INTERVAL '%s minutes'""", (user_id, timeout_min))
         existing = [r['number'] for r in cur.fetchall()]
@@ -786,7 +772,51 @@ def reserve_tickets():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== SUBMIT ORDER (fixed flow: DB first, notify after) ====================
+# ==================== RELEASE RESERVATION ====================
+@app.route('/api/release-reservation', methods=['POST'])
+def release_reservation():
+    """Explicitly release a user's reservations (called on page close)."""
+    data = request.get_json(silent=True) or {}
+    user_id = require_verified_user(request, data.get('user_id'))
+    numbers = data.get('numbers', [])
+    
+    if not user_id or not numbers:
+        return jsonify({"success": False, "message": "Missing data"}), 400
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cur.execute("""
+            UPDATE tickets
+            SET status='available', user_id=NULL,
+                reserved_at=NULL, updated_at=CURRENT_TIMESTAMP
+            WHERE number = ANY(%s)
+              AND user_id = %s
+              AND status = 'reserved'
+            RETURNING number;
+        """, (numbers, user_id))
+        
+        released = [r['number'] for r in cur.fetchall()]
+        conn.commit()
+        cur.close()
+        
+        logger.info(f"🔓 Released {len(released)} tickets for user {user_id}")
+        
+        return jsonify({
+            "success": True,
+            "released": released,
+            "count": len(released)
+        })
+    except Exception as e:
+        if conn: conn.rollback()
+        logger.error(f"release_reservation: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        if conn: release_db_connection(conn)
+
+# ==================== SUBMIT ORDER ====================
 @app.route('/api/submit-order', methods=['POST'])
 @limiter.limit("10 per minute")
 def submit_order():
@@ -801,7 +831,7 @@ def submit_order():
     if not selected or not user_id or not user_name or not user_phone or len(selected) != len(set(selected)):
         return jsonify({"success": False, "message": "እባክዎ ሁሉንም ይሙሉ"}), 400
 
-    # ─── Server-side receipt validation ───
+    # Server-side receipt validation
     ok, mime, size, err = validate_receipt(receipt_b64)
     if not ok:
         return jsonify({"success": False, "message": err}), 400
@@ -829,14 +859,12 @@ def submit_order():
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # Lock tickets
         cur.execute("SELECT number, status, user_id FROM tickets WHERE number = ANY(%s) FOR UPDATE", (selected,))
         rows = cur.fetchall()
         if len(rows) != len(set(selected)):
             conn.rollback()
             return jsonify({"success": False, "code": "NOT_FOUND", "message": "ቁጥሮች አልተገኙም"}), 400
 
-        # ─── Clear errors for expired/foreign reservations ───
         not_owned = [r['number'] for r in rows if str(r['user_id']) != user_id]
         if not_owned:
             conn.rollback()
@@ -847,9 +875,9 @@ def submit_order():
         if not_reserved:
             conn.rollback()
             return jsonify({"success": False, "code": "RESERVATION_EXPIRED",
-                            "message": f"የተያዙት ጊዜ አልቋል። እንደገና ይምረጡ።"}), 409
+                            "message": "የተያዙት ጊዜ አልቋል። እንደገና ይምረጡ።"}), 409
 
-        # ─── STEP 1: Insert order (main entity) ───
+        # STEP 1: Insert order
         cur.execute("""
             INSERT INTO orders (order_id, user_id, user_name, user_phone, referrer,
                                 ticket_count, total_price, receipt_mime, receipt_size,
@@ -858,7 +886,7 @@ def submit_order():
         """, (order_id, user_id, user_name, user_phone, referrer,
               len(selected), total_price, mime, size))
 
-        # ─── STEP 2: Update tickets (link to order) ───
+        # STEP 2: Update tickets
         cur.execute("""
             UPDATE tickets SET status='pending', user_id=%s, user_name=%s,
                 user_phone=%s, referrer=%s, price_paid=%s, order_id=%s,
@@ -869,13 +897,13 @@ def submit_order():
         conn.commit()
         cur.close()
 
-        # ─── STEP 3: Notify admin (AFTER commit — failure doesn't break order) ───
+        # STEP 3: Notify admin AFTER commit
         file_id, notified = send_admin_notification(
             user_name, user_phone, selected, total_price,
             referrer, receipt_b64, user_id, order_id
         )
 
-        # ─── STEP 4: Update receipt_file_id if notification succeeded ───
+        # STEP 4: Update receipt_file_id if notification succeeded
         if notified and file_id:
             try:
                 conn2 = get_db_connection()
@@ -1405,14 +1433,6 @@ def admin_audit_logs():
     finally:
         if conn: release_db_connection(conn)
 
-# ==================== ERROR HANDLER ====================
-@app.errorhandler(Exception)
-def handle_exception(e):
-    logger.error(f"Unhandled: {e}", exc_info=True)
-    if IS_PRODUCTION:
-        return jsonify({"success": False, "error": "Internal server error"}), 500
-    return jsonify({"success": False, "error": str(e)}), 500
-
 # ==================== HELPERS ====================
 @app.route('/api/admin/hash-password', methods=['POST'])
 def generate_password_hash():
@@ -1424,6 +1444,14 @@ def generate_password_hash():
     if not pwd or len(pwd) < 8:
         return jsonify({"success": False, "error": "Password too short"}), 400
     return jsonify({"success": True, "hash": hash_password(pwd)})
+
+# ==================== ERROR HANDLER ====================
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logger.error(f"Unhandled: {e}", exc_info=True)
+    if IS_PRODUCTION:
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+    return jsonify({"success": False, "error": str(e)}), 500
 
 # ==================== RUN ====================
 if __name__ == '__main__':
